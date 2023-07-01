@@ -93,11 +93,9 @@ result = pd.DataFrame(index=data_copy['Person id'].unique(), columns=intervals)
 
 for person_id in data_copy['Person id'].unique():
     person_data = data_copy[data_copy['Person id'] == person_id]
+    activity_duration = {interval: [] for interval in intervals}
 
     for idx, row in person_data.iterrows():
-        activity_duration = {}
-        print("Starting one person.")
-
         for interval in intervals:
             interval_start = interval
             interval_end = (datetime.combine(date.today(), interval) + timedelta(minutes=15)).time() if interval != \
@@ -111,13 +109,14 @@ for person_id in data_copy['Person id'].unique():
                 overlap_duration = datetime.combine(date.today(), overlap_end) - datetime.combine(date.today(),
                                                                                                   overlap_start)
 
-                if interval not in activity_duration:
-                    activity_duration[interval] = []
                 activity_duration[interval].append((overlap_duration, row['activity']))
 
-        for interval, durations in activity_duration.items():
-            max_duration = max(durations, key=lambda x: x[0])
-            result.loc[person_id, interval] = max_duration[1]
+    for interval, durations in activity_duration.items():
+        if durations:
+            max_duration_activity = max(durations, key=lambda x: x[0])[1]
+            result.loc[person_id, interval] = max_duration_activity
+            print("finished")
+
 
 result.reset_index(inplace=True)
 result.rename(columns={'index': 'Person id'}, inplace=True)
