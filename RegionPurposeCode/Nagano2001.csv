@@ -1,0 +1,14 @@
+﻿code,purpose
+1,Commute
+2,Go_School
+3,Back_Home
+4,Shopping_Daily
+5,Go_Eat
+6,Pickup&Drop_Off 
+7,Private_Movement
+8,Delivering
+9,Attend_Meeting
+10,Go_Occupation
+11,Go_Agricultural_Work
+12,Go_Other_Business
+99,House
