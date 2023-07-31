@@ -3,7 +3,9 @@ import torch.nn as nn
 import torch.nn.init as init
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import get_linear_schedule_with_warmup
-from transformers import PreTrainedTokenizerFast, DataCollatorForLanguageModeling
+from transformers import PreTrainedTokenizerFast
+import numpy as np
+from sklearn.metrics import precision_recall_fscore_support
 
 train_file = "/home/ubuntu/Documents/TokyoPT/PTChain/train.txt"
 val_file = "/home/ubuntu/Documents/TokyoPT/PTChain/eval.txt"
@@ -34,9 +36,6 @@ train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True
 
 val_dataset = TensorDataset(val_input_ids, val_labels)
 val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
-
-# Create DataCollator for language modeling (used during training)
-# data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
 
 class CustomGPT1Model(nn.Module):
@@ -78,6 +77,17 @@ class CustomGPT1Model(nn.Module):
         return logit_result
 
 
+def calculate_metrics(preds, labels):
+    preds = np.argmax(preds, axis=-1).flatten()
+    labels = labels.flatten()
+    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='macro', zero_division=0)
+    return precision, recall, f1
+
+
+def calculate_perplexity(loss):
+    return np.exp(loss)
+
+
 def evaluate_model(model, dataloader, loss_fn):
     model.eval()
     total_loss = 0.0
@@ -99,7 +109,7 @@ model = CustomGPT1Model()
 model.initialize_weights()
 
 loss_fn = torch.nn.CrossEntropyLoss()
-learning_rate = 1e-4
+learning_rate = 1e-3
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 num_epochs = 5
 num_train_steps = len(train_dataloader) * num_epochs
@@ -112,6 +122,7 @@ scheduler = get_linear_schedule_with_warmup(
 for epoch in range(num_epochs):
     model.train()
     total_loss = 0.0
+    total_precision, total_recall, total_f1 = 0.0, 0.0, 0.0
 
     for step, batch in enumerate(train_dataloader):
         inputs, labels = batch
@@ -121,18 +132,32 @@ for epoch in range(num_epochs):
         optimizer.step()
         optimizer.zero_grad()
         scheduler.step()
-
+        print(f"Current learning rate: {scheduler.get_last_lr()[0]}")
         total_loss += loss.item()
 
+        preds = logits.detach().cpu().numpy()
+        labels = labels.detach().cpu().numpy()
+        precision, recall, f1 = calculate_metrics(preds, labels)
+        total_precision += precision
+        total_recall += recall
+        total_f1 += f1
+
         if step % 100 == 0:
-            print(f"Epoch {epoch + 1}/{num_epochs} | Step {step}/{len(train_dataloader)} | Loss: {loss.item():.8f}")
+            avg_precision = total_precision / (step + 1)
+            avg_recall = total_recall / (step + 1)
+            avg_f1 = total_f1 / (step + 1)
+            print(f"Epoch {epoch + 1}/{num_epochs} | Step {step}/{len(train_dataloader)} | "
+                  f"Loss: {loss.item():.8f} | Precision: {avg_precision:.4f} | Recall: {avg_recall:.4f} | F1: {avg_f1:.4f}")
 
     average_loss = total_loss / len(train_dataloader)
-    print(f"Epoch {epoch + 1}/{num_epochs} | Average Loss: {average_loss:.8f}")
+    avg_precision = total_precision / len(train_dataloader)
+    avg_recall = total_recall / len(train_dataloader)
+    avg_f1 = total_f1 / len(train_dataloader)
+    print(f"Epoch {epoch + 1}/{num_epochs} | Average Loss: {average_loss:.8f} | "
+          f"Precision: {avg_precision:.4f} | Recall: {avg_recall:.4f} | F1: {avg_f1:.4f} | Perplexity: {calculate_perplexity(average_loss):.4f}")
 
     val_loss = evaluate_model(model, val_dataloader, loss_fn)
-    print(f"Epoch {epoch + 1}/{num_epochs} | Validation Loss: {val_loss:.8f}")
+    print(f"Epoch {epoch + 1}/{num_epochs} | Validation Loss: {val_loss:.8f} | Validation Perplexity: {calculate_perplexity(val_loss):.4f}")
 
-# After each epoch, evaluate on validation data and print validation loss
-val_loss = evaluate_model(model, val_dataloader, loss_fn)
-print(f"Epoch {epoch + 1}/{num_epochs} | Validation Loss: {val_loss:.8f}")
+torch.save(model.state_dict(), f'/Users/zhangkunyi/Downloads/PTFolder/PTChain/model_{epoch}.pth')
+
