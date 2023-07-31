@@ -1,101 +1,138 @@
-from transformers import GPT2Tokenizer, GPT2LMHeadModel, TextDataset, TrainingArguments, Trainer, \
-    DataCollatorForLanguageModeling, LineByLineTextDataset, PreTrainedTokenizerFast
-import logging
+import torch
+import torch.nn as nn
+import torch.nn.init as init
+from torch.utils.data import DataLoader, TensorDataset
+from transformers import get_linear_schedule_with_warmup
+from transformers import PreTrainedTokenizerFast, DataCollatorForLanguageModeling
 
+train_file = "/home/ubuntu/Documents/TokyoPT/PTChain/train.txt"
+val_file = "/home/ubuntu/Documents/TokyoPT/PTChain/eval.txt"
 
-class CustomTrainer(Trainer):
-    # def log(self, logs):
-    #     logs = {k: round(v, 2) if isinstance(v, float) else round(v.item(), 2) for k, v in logs.items()}
-    #
-    #     super().log(logs)
-    #     if self.state.global_step % self.args.logging_steps == 0 and self.state.global_step > 0:
-    #         inputs = next(iter(self.get_train_dataloader()))
-    #         inputs = {name: tensor.to(self.args.device) for name, tensor in inputs.items()}
-    #         outputs = self.model(**inputs)
-    #         predicted_tokens = tokenizer.convert_ids_to_tokens(outputs.logits.argmax(-1)[0].tolist())
-    #         input_text = tokenizer.decode(inputs['input_ids'][0])
-    #
-    #         print(f"At step {self.state.global_step}, original_input_train: {input_text}")
-    #         print(f"At step {self.state.global_step}, decoded_input_token: {predicted_tokens}")
+with open(train_file, "r", encoding="utf-8") as f:
+    train_texts = [line.strip() for line in f.readlines()]
 
-    def evaluation_loop(self, dataloader, description, prediction_loss_only=False, ignore_keys=None,
-                        metric_key_prefix="eval"):
-        for step, inputs in enumerate(dataloader):
-            inputs = {name: tensor.to(self.args.device) for name, tensor in inputs.items()}
-            outputs = self.model(**inputs)
-            predictions = outputs[0]
-            predicted_tokens = tokenizer.convert_ids_to_tokens(predictions.argmax(-1).tolist())
-            if step <= 5:
-                print("validation_predicted_tokens:", predicted_tokens)
-                # input_text = tokenizer.decode(inputs['input_ids'][0])
-                # print("original_input_validation:", input_text)
-
-        return super().evaluation_loop(dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix)
-
-
-logging.basicConfig(
-    filename='/home/ubuntu/Documents/TokyoPT/PTChain/training_logs.txt',
-    filemode='a',
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-)
-
-val_logger = logging.getLogger('validation')
-val_logger.setLevel(logging.INFO)
-val_handler = logging.FileHandler('/home/ubuntu/Documents/TokyoPT/PTChain/validation_logs.txt')
-val_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-val_handler.setFormatter(val_formatter)
-val_logger.addHandler(val_handler)
+with open(val_file, "r", encoding="utf-8") as f:
+    val_texts = [line.strip() for line in f.readlines()]
 
 tokenizer = PreTrainedTokenizerFast(tokenizer_file="/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer.json")
 tokenizer.pad_token = "[PAD]"
+tokenizer.eos_token = "[EOS]"
 
-model = GPT2LMHeadModel.from_pretrained('distilgpt2')
-model.resize_token_embeddings(len(tokenizer))
+train_encodings = tokenizer(train_texts, padding=True, truncation=True, max_length=96)
+val_encodings = tokenizer(val_texts, padding=True, truncation=True, max_length=96)
 
-train_dataset = LineByLineTextDataset(
-    tokenizer=tokenizer,
-    file_path="/home/ubuntu/Documents/TokyoPT/PTChain/train.txt",
-    block_size=96,
+# Convert tokenized encodings to torch tensors
+train_input_ids = torch.tensor(train_encodings.input_ids)
+train_labels = torch.tensor(train_encodings.input_ids)  # Labels are the same as inputs for language modeling tasks
+
+val_input_ids = torch.tensor(val_encodings.input_ids)
+val_labels = torch.tensor(val_encodings.input_ids)
+
+batch_size = 32
+train_dataset = TensorDataset(train_input_ids, train_labels)
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+val_dataset = TensorDataset(val_input_ids, val_labels)
+val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
+
+# Create DataCollator for language modeling (used during training)
+# data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+
+class CustomGPT1Model(nn.Module):
+    def __init__(self, vocab_size=33, hidden_size=256, num_layers=4, num_heads=4, max_sequence_len=512):
+        super(CustomGPT1Model, self).__init__()
+        self.vocab_size = vocab_size
+        self.embeddings = nn.Embedding(vocab_size, hidden_size)
+        self.position_embeddings = nn.Embedding(max_sequence_len, hidden_size)
+        self.transformer_layers = nn.ModuleList([
+            nn.TransformerEncoderLayer(d_model=hidden_size, nhead=num_heads)
+            for _ in range(num_layers)
+        ])
+        self.layer_norm = nn.LayerNorm(hidden_size)
+        self.output_layer = nn.Linear(hidden_size, vocab_size)
+
+    def initialize_weights(self):
+        for module in self.modules():
+            if isinstance(module, (nn.Linear, nn.Embedding)):
+                # Apply weight initialization for linear layers and embeddings
+                init.normal_(module.weight, mean=0.0, std=0.02)
+                if hasattr(module, "bias") and module.bias is not None:
+                    init.zeros_(module.bias)
+            elif isinstance(module, nn.LayerNorm):
+                # Apply weight initialization for layer normalization layers
+                init.ones_(module.weight)
+                init.zeros_(module.bias)
+
+    def forward(self, input_ids):
+        token_embeddings = self.embeddings(input_ids)
+        position_ids = torch.arange(0, input_ids.size(1)).unsqueeze(0).to(input_ids.device)
+        position_embeddings = self.position_embeddings(position_ids)
+        embeddings = token_embeddings + position_embeddings
+        embeddings = self.layer_norm(embeddings)
+        for layer in self.transformer_layers:
+            embeddings = layer(embeddings)
+        embeddings = self.layer_norm(embeddings)
+        logit_result = self.output_layer(embeddings)
+
+        return logit_result
+
+
+def evaluate_model(model, dataloader, loss_fn):
+    model.eval()
+    total_loss = 0.0
+    num_samples = 0
+
+    with torch.no_grad():
+        for batch in dataloader:
+            inputs, labels = batch
+            logits = model(inputs)
+            loss = loss_fn(logits.view(-1, model.vocab_size), labels.view(-1))
+            total_loss += loss.item()
+            num_samples += inputs.size(0)
+
+    average_loss = total_loss / num_samples
+    return average_loss
+
+
+model = CustomGPT1Model()
+model.initialize_weights()
+
+loss_fn = torch.nn.CrossEntropyLoss()
+learning_rate = 1e-4
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+num_epochs = 5
+num_train_steps = len(train_dataloader) * num_epochs
+scheduler = get_linear_schedule_with_warmup(
+    optimizer,
+    num_warmup_steps=0.1 * num_train_steps,
+    num_training_steps=num_train_steps
 )
 
-eval_dataset = LineByLineTextDataset(
-    tokenizer=tokenizer,
-    file_path="/home/ubuntu/Documents/TokyoPT/PTChain/eval.txt",
-    block_size=96,
-)
+for epoch in range(num_epochs):
+    model.train()
+    total_loss = 0.0
 
-data_collator = DataCollatorForLanguageModeling(
-    tokenizer=tokenizer, mlm=False,
-)
+    for step, batch in enumerate(train_dataloader):
+        inputs, labels = batch
+        logits = model(inputs)
+        loss = loss_fn(logits.view(-1, model.vocab_size), labels.view(-1))
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        scheduler.step()
 
-training_args = TrainingArguments(
-    output_dir="/home/ubuntu/Documents/TokyoPT",
-    logging_dir='./logs',
-    overwrite_output_dir=True,
-    num_train_epochs=5,
-    per_device_train_batch_size=4,
-    per_device_eval_batch_size=4,
-    save_steps=250,
-    logging_steps=250,
-    save_total_limit=1,
-    learning_rate=0.001,
-    gradient_accumulation_steps=8,
-    evaluation_strategy="epoch",
-    lr_scheduler_type='cosine_with_restarts',
-    warmup_steps=500,
-)
+        total_loss += loss.item()
 
-trainer = CustomTrainer(
-    model=model,
-    args=training_args,
-    data_collator=data_collator,
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-)
+        if step % 100 == 0:
+            print(f"Epoch {epoch + 1}/{num_epochs} | Step {step}/{len(train_dataloader)} | Loss: {loss.item():.8f}")
 
-trainer.train()
-eval_results = trainer.evaluate()
+    average_loss = total_loss / len(train_dataloader)
+    print(f"Epoch {epoch + 1}/{num_epochs} | Average Loss: {average_loss:.8f}")
 
-for key in sorted(eval_results.keys()):
-    val_logger.info(f"{key}: {eval_results[key]}")
+    val_loss = evaluate_model(model, val_dataloader, loss_fn)
+    print(f"Epoch {epoch + 1}/{num_epochs} | Validation Loss: {val_loss:.8f}")
+
+# After each epoch, evaluate on validation data and print validation loss
+val_loss = evaluate_model(model, val_dataloader, loss_fn)
+print(f"Epoch {epoch + 1}/{num_epochs} | Validation Loss: {val_loss:.8f}")
