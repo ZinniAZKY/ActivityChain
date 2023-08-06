@@ -30,7 +30,7 @@ train_labels = torch.tensor(train_encodings.input_ids)  # Labels are the same as
 val_input_ids = torch.tensor(val_encodings.input_ids)
 val_labels = torch.tensor(val_encodings.input_ids)
 
-batch_size = 32
+batch_size = 4
 train_dataset = TensorDataset(train_input_ids, train_labels)
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -39,7 +39,7 @@ val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
 
 
 class CustomGPT1Model(nn.Module):
-    def __init__(self, vocab_size=33, hidden_size=256, num_layers=4, num_heads=4, max_sequence_len=512):
+    def __init__(self, vocab_size=33, hidden_size=4, num_layers=1, num_heads=1, max_sequence_len=128, dropout=0.25):
         super(CustomGPT1Model, self).__init__()
         self.vocab_size = vocab_size
         self.embeddings = nn.Embedding(vocab_size, hidden_size)
@@ -50,6 +50,7 @@ class CustomGPT1Model(nn.Module):
         ])
         self.layer_norm = nn.LayerNorm(hidden_size)
         self.output_layer = nn.Linear(hidden_size, vocab_size)
+        self.dropout = nn.Dropout(dropout)
 
     def initialize_weights(self):
         for module in self.modules():
@@ -109,9 +110,9 @@ model = CustomGPT1Model()
 model.initialize_weights()
 
 loss_fn = torch.nn.CrossEntropyLoss()
-learning_rate = 1e-3
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-num_epochs = 5
+learning_rate = 0.000003
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+num_epochs = 10
 num_train_steps = len(train_dataloader) * num_epochs
 scheduler = get_linear_schedule_with_warmup(
     optimizer,
@@ -122,7 +123,8 @@ scheduler = get_linear_schedule_with_warmup(
 for epoch in range(num_epochs):
     model.train()
     total_loss = 0.0
-    total_precision, total_recall, total_f1 = 0.0, 0.0, 0.0
+
+    all_preds, all_labels = [], []
 
     for step, batch in enumerate(train_dataloader):
         inputs, labels = batch
@@ -132,32 +134,26 @@ for epoch in range(num_epochs):
         optimizer.step()
         optimizer.zero_grad()
         scheduler.step()
-        print(f"Current learning rate: {scheduler.get_last_lr()[0]}")
+
         total_loss += loss.item()
 
-        preds = logits.detach().cpu().numpy()
-        labels = labels.detach().cpu().numpy()
-        precision, recall, f1 = calculate_metrics(preds, labels)
-        total_precision += precision
-        total_recall += recall
-        total_f1 += f1
+        preds = np.argmax(logits.detach().cpu().numpy(), axis=-1).flatten()
+        labels = labels.detach().cpu().numpy().flatten()
 
-        if step % 100 == 0:
-            avg_precision = total_precision / (step + 1)
-            avg_recall = total_recall / (step + 1)
-            avg_f1 = total_f1 / (step + 1)
-            print(f"Epoch {epoch + 1}/{num_epochs} | Step {step}/{len(train_dataloader)} | "
-                  f"Loss: {loss.item():.8f} | Precision: {avg_precision:.4f} | Recall: {avg_recall:.4f} | F1: {avg_f1:.4f}")
+        all_preds.extend(preds)
+        all_labels.extend(labels)
+
+        if step % 10000 == 0:
+            print(f"Epoch {epoch + 1}/{num_epochs} | Step {step}/{len(train_dataloader)} | Loss: {loss.item():.8f}")
 
     average_loss = total_loss / len(train_dataloader)
-    avg_precision = total_precision / len(train_dataloader)
-    avg_recall = total_recall / len(train_dataloader)
-    avg_f1 = total_f1 / len(train_dataloader)
+    precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='macro', zero_division=0)
     print(f"Epoch {epoch + 1}/{num_epochs} | Average Loss: {average_loss:.8f} | "
-          f"Precision: {avg_precision:.4f} | Recall: {avg_recall:.4f} | F1: {avg_f1:.4f} | Perplexity: {calculate_perplexity(average_loss):.4f}")
+          f"Precision: {precision:.8f} | Recall: {recall:.8f} | F1: {f1:.8f} | Perplexity: {calculate_perplexity(average_loss):.8f}")
 
     val_loss = evaluate_model(model, val_dataloader, loss_fn)
-    print(f"Epoch {epoch + 1}/{num_epochs} | Validation Loss: {val_loss:.8f} | Validation Perplexity: {calculate_perplexity(val_loss):.4f}")
+    print(
+        f"Epoch {epoch + 1}/{num_epochs} | Validation Loss: {val_loss:.8f} | Validation Perplexity: {calculate_perplexity(val_loss):.8f}")
 
-torch.save(model.state_dict(), f'/Users/zhangkunyi/Downloads/PTFolder/PTChain/model_{epoch}.pth')
+    torch.save(model.state_dict(), f'/home/ubuntu/Documents/model_{epoch+1}.pth')
 
