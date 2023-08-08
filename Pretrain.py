@@ -29,7 +29,7 @@ train_labels = torch.tensor(train_encodings.input_ids)  # Labels are the same as
 val_input_ids = torch.tensor(val_encodings.input_ids)
 val_labels = torch.tensor(val_encodings.input_ids)
 
-batch_size = 4
+batch_size = 256
 train_dataset = TensorDataset(train_input_ids, train_labels)
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -69,9 +69,9 @@ model = CustomGPT1Model()
 model.initialize_weights()
 
 loss_fn = torch.nn.CrossEntropyLoss()
-learning_rate = 0.00005
+learning_rate = 0.0001
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
-num_epochs = 5
+num_epochs = 25
 num_train_steps = len(train_dataloader) * num_epochs
 scheduler = get_linear_schedule_with_warmup(
     optimizer,
@@ -102,7 +102,7 @@ for epoch in range(num_epochs):
         all_preds.extend(preds)
         all_labels.extend(labels)
 
-        if step % 10000 == 0:
+        if step % 500 == 0:
             print(f"Epoch {epoch + 1}/{num_epochs} | Step {step}/{len(train_dataloader)} | Loss: {loss.item():.8f}")
 
     average_loss = total_loss / len(train_dataloader)
