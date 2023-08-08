@@ -4,7 +4,7 @@ import torch.nn.init as init
 
 
 class CustomGPT1Model(nn.Module):
-    def __init__(self, vocab_size=33, hidden_size=4, num_layers=1, num_heads=1, max_sequence_len=128, dropout=0.25):
+    def __init__(self, vocab_size=33, hidden_size=64, num_layers=2, num_heads=2, max_sequence_len=64, dropout=0.25):
         super(CustomGPT1Model, self).__init__()
         self.vocab_size = vocab_size
         self.embeddings = nn.Embedding(vocab_size, hidden_size)
@@ -29,7 +29,7 @@ class CustomGPT1Model(nn.Module):
                 init.ones_(module.weight)
                 init.zeros_(module.bias)
 
-    def forward(self, input_ids, labels=None, **kwargs):
+    def forward(self, input_ids, labels=None, weights=None, **kwargs):
         token_embeddings = self.embeddings(input_ids)
         position_ids = torch.arange(0, input_ids.size(1)).unsqueeze(0).to(input_ids.device)
         position_embeddings = self.position_embeddings(position_ids)
@@ -44,9 +44,15 @@ class CustomGPT1Model(nn.Module):
             # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = nn.CrossEntropyLoss()
+            if weights is not None:
+                # Use the weights for the loss calculation
+                loss_fct = nn.CrossEntropyLoss(weight=weights)
+            else:
+                loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
             return loss, logits
 
         return logits
+
+
+
