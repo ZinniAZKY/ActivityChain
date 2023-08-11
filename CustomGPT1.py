@@ -4,6 +4,7 @@ import torch.nn.init as init
 
 
 class CustomGPT1Model(nn.Module):
+    # 修改参数（hidden_size=32, num_layers=2, num_heads=2, max_sequence_len=128, dropout=0.5）
     def __init__(self, vocab_size=33, hidden_size=32, num_layers=2, num_heads=2, max_sequence_len=128, dropout=0.5):
         super(CustomGPT1Model, self).__init__()
         self.vocab_size = vocab_size
