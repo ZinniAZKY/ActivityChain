@@ -1,6 +1,6 @@
 from tokenizers import Tokenizer, models, normalizers, pre_tokenizers, decoders
 from transformers import PreTrainedTokenizerFast
-
+# 词根
 tokens = ["Commute", "House", "Office", "Store_Daily", "Go_School", "School", "Back_Home",
           "Shopping_Daily", "Shopping_Nondaily", "Store_Nondaily", "Go_Eat", "Socializing",
           "Go_Recreational_Facility", "Pickup_Drop_Off", "Go_Sightseeing", "Tourist_Spot",
@@ -20,7 +20,7 @@ tokenizer.decoder = decoders.WordPiece()
 tokenizer.add_special_tokens(special_tokens)
 tokenizer.save("/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer.json")
 
-# Test tokenizer
+## 验证词根
 # tokenizer = PreTrainedTokenizerFast(tokenizer_file="/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer.json")
 # tokenizer.pad_token = "[PAD]"
 # tokenizer.eos_token = "[EOS]"
