@@ -49,6 +49,7 @@ for token, freq in token_frequencies.items():
     if freq == 0:
         token_frequencies[token] = 0.001
 
+# 平衡过多的House
 max_weight = max(total_samples / (1 * freq) for freq in token_frequencies.values())
 for token, freq in token_frequencies.items():
     if token == "House":
