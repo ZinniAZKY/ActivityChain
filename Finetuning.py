@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
+# frequency使用每个微调的数据集的frequency
 token_frequencies = {
     'House': 2527564,
     'Commute': 111670,
@@ -137,6 +138,7 @@ val_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(me
 val_handler.setFormatter(val_formatter)
 val_logger.addHandler(val_handler)
 
+# 注意tokenizer路径
 tokenizer = PreTrainedTokenizerFast(tokenizer_file="/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer.json")
 tokenizer.pad_token = "[PAD]"
 
@@ -144,6 +146,7 @@ tokenizer.pad_token = "[PAD]"
 model = torch.load('/home/ubuntu/Documents/model_6.pth')
 # model.resize_token_embeddings(len(tokenizer))
 
+# 微调数据集需要使用不同PTtrip chain
 train_dataset = LineByLineTextDataset(
     tokenizer=tokenizer,
     file_path="/home/ubuntu/Documents/TokyoPT/PTChain/Chukyo2011PTChainRefinedhalfUpsampleTrain.txt",
