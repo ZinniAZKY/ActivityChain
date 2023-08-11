@@ -29,6 +29,7 @@ train_labels = torch.tensor(train_encodings.input_ids)  # Labels are the same as
 val_input_ids = torch.tensor(val_encodings.input_ids)
 val_labels = torch.tensor(val_encodings.input_ids)
 
+# 256-1024
 batch_size = 512
 train_dataset = TensorDataset(train_input_ids, train_labels)
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -69,8 +70,11 @@ model = CustomGPT1Model()
 model.initialize_weights()
 
 loss_fn = torch.nn.CrossEntropyLoss()
+# 0.00003，0.00005
 learning_rate = 0.00001
+# weight decay可选
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+# 20或15个epochs
 num_epochs = 20
 num_train_steps = len(train_dataloader) * num_epochs
 scheduler = get_linear_schedule_with_warmup(
