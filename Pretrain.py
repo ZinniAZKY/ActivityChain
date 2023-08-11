@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
 from transformers import get_linear_schedule_with_warmup
 
+# pretrain用所有城市的数据集，按照0.1分配训练和验证
 train_file = "/home/ubuntu/Documents/TokyoPT/PTChain/combinedhalfTrain.txt"
 val_file = "/home/ubuntu/Documents/TokyoPT/PTChain/combinedhalfEval.txt"
 
@@ -15,6 +16,7 @@ with open(train_file, "r", encoding="utf-8") as f:
 with open(val_file, "r", encoding="utf-8") as f:
     val_texts = [line.strip() for line in f.readlines()]
 
+# 生成的tokenizer位置
 tokenizer = PreTrainedTokenizerFast(tokenizer_file="/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer.json")
 tokenizer.pad_token = "[PAD]"
 tokenizer.eos_token = "[EOS]"
