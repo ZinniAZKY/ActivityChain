@@ -6,38 +6,37 @@ import torch.nn.functional as F
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
-# frequency使用每个微调的数据集的frequency
 token_frequencies = {
-    'House': 2527564,
-    'Commute': 111670,
-    'Office': 798887,
-    'Store_Daily': 1940,
-    'Go_School': 43850,
-    'School': 411453,
-    'Back_Home': 1041,
-    'Shopping_Daily': 663,
-    'Shopping_Nondaily': 399,
-    'Store_Nondaily': 866,
-    'Go_Eat': 2260,
-    'Socializing': 6708,
+    'House': 5617234,
+    'Commute': 125183,
+    'Office': 2107014,
+    'Store_Daily': 84047,
+    'Go_School': 52221,
+    'School': 970859,
+    'Back_Home': 141807,
+    'Shopping_Daily': 23272,
+    'Shopping_Nondaily': 7078,
+    'Store_Nondaily': 22402,
+    'Go_Eat': 16672,
+    'Socializing': 89565,
     'Go_Recreational_Facility': 0,
-    'Pickup_Drop_Off': 1386,
-    'Go_Sightseeing': 1113,
-    'Tourist_Spot.py': 3467,
-    'Private_Movement': 2017,
-    'Private_Space': 7994,
-    'Delivering': 1181,
-    'Business_Place': 36439,
-    'Attend_Meeting': 2331,
-    'Go_Occupation': 2466,
-    'Go_Agricultural_Work': 273,
-    'Natural_Area': 2939,
-    'Go_Other_Business': 4147,
+    'Pickup_Drop_Off': 11722,
+    'Go_Sightseeing': 3583,
+    'Tourist_Spot': 17945,
+    'Private_Movement': 22267,
+    'Private_Space': 120335,
+    'Delivering': 3295,
+    'Business_Place': 165004,
+    'Attend_Meeting': 6664,
+    'Go_Occupation': 3674,
+    'Go_Agricultural_Work': 1130,
+    'Natural_Area': 19439,
+    'Go_Other_Business': 18745,
     'Go_Exercise': 0,
     'Pitch': 0,
-    'Volunteering': 374,
-    'Public_Space': 1976,
-    'Welcoming': 2766,
+    'Volunteering': 1989,
+    'Public_Space': 17435,
+    'Welcoming': 25608,
     '[UNK]': 0,
     '[PAD]': 0,
     '[EOS]': 0,
@@ -50,7 +49,6 @@ for token, freq in token_frequencies.items():
     if freq == 0:
         token_frequencies[token] = 0.001
 
-# 平衡过多的House
 max_weight = max(total_samples / (1 * freq) for freq in token_frequencies.values())
 for token, freq in token_frequencies.items():
     if token == "House":
@@ -99,7 +97,7 @@ class CustomTrainer(Trainer):
             if step == 0:
                 for b in range(len(predicted_indices)):
                     print(f"Batch item {b}:")
-                    for idx, token in enumerate(predicted_tokens_batch[b][:10]):
+                    for idx, token in enumerate(predicted_tokens_batch[b][:25]):
                         print(f"Token: {token}, Probability: {predicted_probs_batch[b, idx]:.5f}")
 
         accuracy = (np.array(true_labels) == np.array(predicted_labels)).mean()
@@ -112,7 +110,52 @@ class CustomTrainer(Trainer):
         combined_metrics = {**original_metrics, **metrics}
 
         return original_results._replace(metrics=combined_metrics)
-        # return super().evaluation_loop(dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix)
+
+    # # Print accuracy of each batch size
+    # def evaluation_loop(self, dataloader, description, prediction_loss_only=False, ignore_keys=None,
+    #                     metric_key_prefix="eval"):
+    #     true_labels = []
+    #     predicted_labels = []
+    #     total_correct = 0
+    #     total_processed = 0
+    #
+    #     for step, inputs in enumerate(dataloader):
+    #         inputs = {name: tensor.to(self.args.device) for name, tensor in inputs.items()}
+    #         outputs = self.model(**inputs)
+    #         predictions = outputs[1]
+    #         predicted_indices = predictions.argmax(-1)
+    #         true_labels.extend(inputs["labels"].cpu().numpy().flatten())
+    #         predicted_labels.extend(predicted_indices.cpu().numpy().flatten())
+    #         predicted_tokens_batch = [tokenizer.convert_ids_to_tokens(indices) for indices in predicted_indices]
+    #         softmax_predictions = F.softmax(predictions, dim=-1)
+    #         predicted_probs_batch = softmax_predictions.gather(2, predicted_indices.unsqueeze(-1)).squeeze(-1)
+    #
+    #         # Update running metrics
+    #         correct_this_batch = (
+    #                     inputs["labels"].cpu().numpy().flatten() == predicted_indices.cpu().numpy().flatten()).sum()
+    #         total_correct += correct_this_batch
+    #         total_processed += len(inputs["labels"].cpu().numpy().flatten())
+    #         running_accuracy = total_correct / total_processed
+    #
+    #         # Print running accuracy for this batch
+    #         print(f"Step {step + 1}/{len(dataloader)} - Running Accuracy: {running_accuracy:.4f}")
+    #
+    #         if step == 0:
+    #             for b in range(len(predicted_indices)):
+    #                 print(f"Batch item {b}:")
+    #                 for idx, token in enumerate(predicted_tokens_batch[b][:25]):
+    #                     print(f"Token: {token}, Probability: {predicted_probs_batch[b, idx]:.5f}")
+    #
+    #     accuracy = (np.array(true_labels) == np.array(predicted_labels)).mean()
+    #     metrics = {
+    #         "accuracy": accuracy,
+    #     }
+    #     original_results = super().evaluation_loop(dataloader, description, prediction_loss_only, ignore_keys,
+    #                                                metric_key_prefix)
+    #     original_metrics = original_results.metrics if hasattr(original_results, "metrics") else {}
+    #     combined_metrics = {**original_metrics, **metrics}
+    #
+    #     return original_results._replace(metrics=combined_metrics)
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels")
@@ -138,24 +181,22 @@ val_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(me
 val_handler.setFormatter(val_formatter)
 val_logger.addHandler(val_handler)
 
-# 注意tokenizer路径
 tokenizer = PreTrainedTokenizerFast(tokenizer_file="/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer.json")
 tokenizer.pad_token = "[PAD]"
 
 # model = GPT2LMHeadModel.from_pretrained('distilgpt2')
-model = torch.load('/home/ubuntu/Documents/model_6.pth')
+model = torch.load('/home/ubuntu/Documents/model_2_1024.pth')
 # model.resize_token_embeddings(len(tokenizer))
 
-# 微调数据集需要使用不同PTtrip chain
 train_dataset = LineByLineTextDataset(
     tokenizer=tokenizer,
-    file_path="/home/ubuntu/Documents/TokyoPT/PTChain/Chukyo2011PTChainRefinedhalfUpsampleTrain.txt",
+    file_path="/home/ubuntu/Documents/TokyoPT/PTChain/Chukyo2011PTChainhalfTrain.txt",
     block_size=48,
 )
 
 eval_dataset = LineByLineTextDataset(
     tokenizer=tokenizer,
-    file_path="/home/ubuntu/Documents/TokyoPT/PTChain/Chukyo2011PTChainRefinedhalfEval.txt",
+    file_path="/home/ubuntu/Documents/TokyoPT/PTChain/Chukyo2011PTChainhalfEval.txt",
     block_size=48,
 )
 
@@ -167,18 +208,18 @@ training_args = TrainingArguments(
     output_dir="/home/ubuntu/Documents/TokyoPT",
     logging_dir='./logs',
     overwrite_output_dir=True,
-    num_train_epochs=15,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
-    save_steps=1000,
-    logging_steps=1000,
+    num_train_epochs=5,
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,
+    save_steps=500,
+    logging_steps=500,
     save_total_limit=1,
-    learning_rate=0.01,
+    learning_rate=0.00005,
     # gradient_accumulation_steps=4,
     evaluation_strategy="epoch",
     # lr_scheduler_type='cosine_with_restarts',
     lr_scheduler_type='cosine',
-    warmup_steps=5000,
+    warmup_steps=2500,
     weight_decay=0.05
 )
 
