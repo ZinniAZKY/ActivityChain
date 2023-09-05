@@ -4,8 +4,7 @@ import torch.nn.init as init
 
 
 class CustomGPT1Model(nn.Module):
-    # 修改参数（hidden_size=32, num_layers=2, num_heads=2, max_sequence_len=128, dropout=0.5）
-    def __init__(self, vocab_size=33, hidden_size=32, num_layers=2, num_heads=2, max_sequence_len=128, dropout=0.5):
+    def __init__(self, vocab_size=71, hidden_size=8, num_layers=2, num_heads=2, max_sequence_len=128, dropout=0.2):
         super(CustomGPT1Model, self).__init__()
         self.vocab_size = vocab_size
         self.embeddings = nn.Embedding(vocab_size, hidden_size)
@@ -21,12 +20,10 @@ class CustomGPT1Model(nn.Module):
     def initialize_weights(self):
         for module in self.modules():
             if isinstance(module, (nn.Linear, nn.Embedding)):
-                # Apply weight initialization for linear layers and embeddings
                 init.normal_(module.weight, mean=0.0, std=0.02)
                 if hasattr(module, "bias") and module.bias is not None:
                     init.zeros_(module.bias)
             elif isinstance(module, nn.LayerNorm):
-                # Apply weight initialization for layer normalization layers
                 init.ones_(module.weight)
                 init.zeros_(module.bias)
 
@@ -35,25 +32,24 @@ class CustomGPT1Model(nn.Module):
         position_ids = torch.arange(0, input_ids.size(1)).unsqueeze(0).to(input_ids.device)
         position_embeddings = self.position_embeddings(position_ids)
         embeddings = token_embeddings + position_embeddings
-        embeddings = self.layer_norm(embeddings)
+
         for layer in self.transformer_layers:
-            embeddings = layer(embeddings)
+            embeddings_norm = self.layer_norm(embeddings)
+            embeddings = layer(embeddings_norm)
+            embeddings += embeddings_norm
+            embeddings = self.dropout(embeddings)
+
         embeddings = self.layer_norm(embeddings)
         logits = self.output_layer(embeddings)
 
         if labels is not None:
-            # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             if weights is not None:
-                # Use the weights for the loss calculation
-                loss_fct = nn.CrossEntropyLoss(weight=weights)
+                loss_func = nn.CrossEntropyLoss(weight=weights)
             else:
-                loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                loss_func = nn.CrossEntropyLoss()
+            loss = loss_func(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
             return loss, logits
 
         return logits
-
-
-
