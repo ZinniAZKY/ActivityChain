@@ -47,14 +47,14 @@ class_weights = {}
 
 for token, freq in token_frequencies.items():
     if freq == 0:
-        token_frequencies[token] = 0.001
+        token_frequencies[token] = 0.00001
 
 max_weight = max(total_samples / (1 * freq) for freq in token_frequencies.values())
 for token, freq in token_frequencies.items():
     if token == "House":
-        class_weights[token] = max_weight * 100
+        class_weights[token] = max_weight * 10
     else:
-        class_weights[token] = total_samples / (100 * freq)
+        class_weights[token] = total_samples / (10 * freq)
 
 max_weight_value = max(class_weights.values())
 for token in class_weights:
@@ -185,7 +185,7 @@ tokenizer = PreTrainedTokenizerFast(tokenizer_file="/home/ubuntu/Documents/Token
 tokenizer.pad_token = "[PAD]"
 
 # model = GPT2LMHeadModel.from_pretrained('distilgpt2')
-model = torch.load('/home/ubuntu/Documents/model_2_1024.pth')
+model = torch.load('/home/ubuntu/Documents/model_10.pth')
 # model.resize_token_embeddings(len(tokenizer))
 
 train_dataset = LineByLineTextDataset(
@@ -208,19 +208,19 @@ training_args = TrainingArguments(
     output_dir="/home/ubuntu/Documents/TokyoPT",
     logging_dir='./logs',
     overwrite_output_dir=True,
-    num_train_epochs=5,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,
-    save_steps=500,
-    logging_steps=500,
+    num_train_epochs=10,
+    per_device_train_batch_size=2,
+    per_device_eval_batch_size=2,
+    save_steps=2500,
+    logging_steps=2500,
     save_total_limit=1,
-    learning_rate=0.00005,
+    learning_rate=0.000005,
     # gradient_accumulation_steps=4,
     evaluation_strategy="epoch",
     # lr_scheduler_type='cosine_with_restarts',
-    lr_scheduler_type='cosine',
-    warmup_steps=2500,
-    weight_decay=0.05
+    lr_scheduler_type='cosine_with_restarts',
+    warmup_steps=500,
+    weight_decay=0.01
 )
 
 trainer = CustomTrainer(
