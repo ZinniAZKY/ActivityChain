@@ -128,7 +128,7 @@ from transformers import get_linear_schedule_with_warmup
 #     torch.save(model, f'/home/ubuntu/Documents/model_{epoch + 1}.pth')
 
 
-# V2.0
+# V2.0 contains methods of 'Slide Windows' and 'Autoregressive'
 train_file = "/home/ubuntu/Documents/TokyoPT/PTChain/combinedhalfTrain.txt"
 val_file = "/home/ubuntu/Documents/TokyoPT/PTChain/combinedhalfEval.txt"
 
@@ -141,6 +141,7 @@ with open(val_file, "r", encoding="utf-8") as f:
 tokenizer = PreTrainedTokenizerFast(tokenizer_file="/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer.json")
 tokenizer.pad_token = "[PAD]"
 tokenizer.eos_token = "[EOS]"
+PAD_TOKEN_ID = tokenizer.convert_tokens_to_ids("[PAD]")
 
 train_encodings = tokenizer(train_texts, padding=True, truncation=True, max_length=48)
 val_encodings = tokenizer(val_texts, padding=True, truncation=True, max_length=48)
@@ -152,12 +153,14 @@ def shift_input_target(text_encodings):
 
     for seq in text_encodings.input_ids:
         for i in range(36, len(seq)):
-            input_sequence = seq[i - 36:i]
+            input_sequence = seq[:i]
             target_sequence = seq[i]
-            input_sequences.append(input_sequence)
+            input_sequences.append(torch.tensor(input_sequence))
             target_sequences.append(target_sequence)
 
-    return torch.tensor(input_sequences), torch.tensor(target_sequences)
+    input_sequences = torch.nn.utils.rnn.pad_sequence(input_sequences, batch_first=True, padding_value=PAD_TOKEN_ID)
+
+    return input_sequences, torch.tensor(target_sequences)
 
 
 train_input_ids, train_labels = shift_input_target(train_encodings)
@@ -184,19 +187,35 @@ def calculate_perplexity(loss):
 def evaluate_model(model, dataloader, loss_fn):
     model.eval()
     total_loss = 0.0
-    num_samples = 0
+    # num_samples = 0
+    predictions = []
+
+    # with torch.no_grad():
+    #     for batch in dataloader:
+    #         inputs, labels = batch
+    #         inputs, labels = inputs.to(device), labels.to(device)
+    #         attention_mask = (inputs != PAD_TOKEN_ID).int().transpose(0, 1)
+    #         logits = model(inputs, attention_mask=attention_mask)
+    #         loss = loss_fn(logits[:, -1, :], labels)
+    #         total_loss += loss.item()
+    #         num_samples += inputs.size(0)
+    #
+    # average_loss = total_loss / len(dataloader)
+    # return average_loss
 
     with torch.no_grad():
         for batch in dataloader:
             inputs, labels = batch
             inputs, labels = inputs.to(device), labels.to(device)
-            logits = model(inputs)
+            attention_mask = (inputs != PAD_TOKEN_ID).int().transpose(0, 1)
+            logits = model(inputs, attention_mask=attention_mask)
             loss = loss_fn(logits[:, -1, :], labels)
             total_loss += loss.item()
-            num_samples += inputs.size(0)
+            preds = np.argmax(logits[:, -1, :].detach().cpu().numpy(), axis=-1).flatten()
+            predictions.extend(preds)
 
     average_loss = total_loss / len(dataloader)
-    return average_loss
+    return average_loss, predictions
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -204,10 +223,9 @@ model = CustomGPT1Model()
 model.to(device)
 model.initialize_weights()
 tokenizer_vocab_size = len(tokenizer.get_vocab())
-assert model.vocab_size == tokenizer_vocab_size, f"Model's vocab size {model.vocab_size} doesn't match tokenizer's vocab size {tokenizer_vocab_size}"
 
 loss_fn = torch.nn.CrossEntropyLoss()
-learning_rate = 0.00005
+learning_rate = 0.000005
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
 num_epochs = 15
 num_train_steps = len(train_dataloader) * num_epochs
@@ -226,7 +244,8 @@ for epoch in range(num_epochs):
     for step, batch in enumerate(train_dataloader):
         inputs, labels = batch
         inputs, labels = inputs.to(device), labels.to(device)
-        logits = model(inputs)
+        attention_mask = (inputs != PAD_TOKEN_ID).int().transpose(0, 1)
+        logits = model(inputs, attention_mask=attention_mask)
         loss = loss_fn(logits[:, -1, :], labels)
         loss.backward()
         optimizer.step()
@@ -259,7 +278,21 @@ for epoch in range(num_epochs):
           f"F1: {f1:.8f} | "
           f"Perplexity: {calculate_perplexity(average_train_loss):.8f}")
 
-    val_loss = evaluate_model(model, val_dataloader, loss_fn)
+    val_loss, val_predictions = evaluate_model(model, val_dataloader, loss_fn)
+    actual_labels = val_labels.tolist()
+    predicted_tokens = [tokenizer.decode([pid]) for pid in val_predictions]
+    actual_tokens = [tokenizer.decode([aid]) for aid in actual_labels]
+    predicted_token_counts = Counter(predicted_tokens)
+    actual_token_counts = Counter(actual_tokens)
+
+    print("Token Occurrences in Ground Truth:")
+    for token, count in actual_token_counts.most_common():
+        print(f"{token}: {count}")
+
+    print("\nToken Occurrences in Predictions:")
+    for token, count in predicted_token_counts.most_common():
+        print(f"{token}: {count}")
+
     print(
         f"Epoch {epoch + 1}/{num_epochs} | Validation Loss: {val_loss:.8f} | "
         f"Validation Perplexity: {calculate_perplexity(val_loss):.8f}")
