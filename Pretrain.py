@@ -152,12 +152,14 @@ def shift_input_target(text_encodings):
     target_sequences = []
 
     for seq in text_encodings.input_ids:
+        # Define how many activity will be used to predict and the others will be used as ground truth for validation.
         for i in range(36, len(seq)):
             input_sequence = seq[:i]
             target_sequence = seq[i]
             input_sequences.append(torch.tensor(input_sequence))
             target_sequences.append(target_sequence)
 
+    # Padding activity chains to the same length.
     input_sequences = torch.nn.utils.rnn.pad_sequence(input_sequences, batch_first=True, padding_value=PAD_TOKEN_ID)
 
     return input_sequences, torch.tensor(target_sequences)
@@ -190,6 +192,7 @@ def evaluate_model(model, dataloader, loss_fn):
     # num_samples = 0
     predictions = []
 
+    # # Evalunation for the Slide Windows method
     # with torch.no_grad():
     #     for batch in dataloader:
     #         inputs, labels = batch
