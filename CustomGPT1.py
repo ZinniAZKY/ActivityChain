@@ -55,9 +55,9 @@ import torch.nn.init as init
 #         return logits
 
 
-# V2.0
+# V2.0 Contains the methods of 'Slide Windows' and 'Autoregressive'
 class CustomGPT1Model(nn.Module):
-    def __init__(self, vocab_size=33, hidden_size=8, num_layers=4, num_heads=4, max_sequence_len=128, dropout=0.4):
+    def __init__(self, vocab_size=33, hidden_size=4, num_layers=2, num_heads=2, max_sequence_len=128, dropout=0.2):
         super(CustomGPT1Model, self).__init__()
         self.vocab_size = vocab_size
         self.embeddings = nn.Embedding(vocab_size, hidden_size)
@@ -80,15 +80,34 @@ class CustomGPT1Model(nn.Module):
                 init.ones_(module.weight)
                 init.zeros_(module.bias)
 
-    def forward(self, input_ids, **kwargs):
+    # def forward(self, input_ids, **kwargs):
+    #     token_embeddings = self.embeddings(input_ids)
+    #     position_ids = torch.arange(0, input_ids.size(1)).unsqueeze(0).to(input_ids.device)
+    #     position_embeddings = self.position_embeddings(position_ids)
+    #     embeddings = token_embeddings + position_embeddings
+    #
+    #     for layer in self.transformer_layers:
+    #         embeddings_norm = self.layer_norm(embeddings)
+    #         embeddings = layer(embeddings_norm)
+    #         embeddings += embeddings_norm
+    #         embeddings = self.dropout(embeddings)
+    #
+    #     embeddings = self.layer_norm(embeddings)
+    #     logits = self.output_layer(embeddings)
+
+    def forward(self, input_ids, attention_mask=None, **kwargs):
         token_embeddings = self.embeddings(input_ids)
         position_ids = torch.arange(0, input_ids.size(1)).unsqueeze(0).to(input_ids.device)
         position_embeddings = self.position_embeddings(position_ids)
         embeddings = token_embeddings + position_embeddings
 
+        # Convert attention mask to expected format (True where padding, False otherwise)
+        if attention_mask is not None:
+            attention_mask = attention_mask == 0
+
         for layer in self.transformer_layers:
             embeddings_norm = self.layer_norm(embeddings)
-            embeddings = layer(embeddings_norm)
+            embeddings = layer(embeddings_norm, src_key_padding_mask=attention_mask)
             embeddings += embeddings_norm
             embeddings = self.dropout(embeddings)
 
