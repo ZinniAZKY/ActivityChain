@@ -98,7 +98,6 @@ import torch
 # combined_attr_df.to_csv("/Users/zhangkunyi/Downloads/PTFolder/PTMerged/combined_attributes.csv", index=False)
 
 
-
 # # 转换csv为txt
 # df = pd.read_csv("/Users/zhangkunyi/Downloads/PTFolder/PTChain/combined.csv")
 #
@@ -113,14 +112,12 @@ import torch
 #         f.write(" ".join(row.astype(str)) + "\n")
 
 
-
-# 生成embedding
-attributes_df = pd.read_csv("/Users/zhangkunyi/Downloads/PTFolder/PTMerged/combined_attributes.csv")
-sentence_df = pd.read_csv("/Users/zhangkunyi/Downloads/PTFolder/PTChain/combined.csv")
+# 生成embeddings
+attributes_df = pd.read_csv("/home/ubuntu/Documents/TokyoPT/combined_attributes.csv")
 
 unique_jobs = attributes_df['occupation'].unique()
 job_to_id = {job: idx for idx, job in enumerate(unique_jobs)}
-attributes_df['occupation'] = attributes_df['occupation'].map(job_to_id)
+attributes_df['occupation'] = attributes_df['occupation'].replace(job_to_id)
 attributes_df = attributes_df.drop_duplicates(subset='Person id').set_index('Person id')
 id_to_attributes = attributes_df.to_dict(orient='index')
 
