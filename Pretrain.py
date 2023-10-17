@@ -298,6 +298,8 @@ if __name__ == "__main__":
     tokenizer.pad_token = "[PAD]"
     tokenizer.eos_token = "[EOS]"
     PAD_TOKEN_ID = tokenizer.convert_tokens_to_ids("[PAD]")
+    EOS_TOKEN_ID = tokenizer.convert_tokens_to_ids("[EOS]")
+    UNK_TOKEN_ID = tokenizer.convert_tokens_to_ids("[UNK]")
 
     train_encodings, val_encodings = tokenize_data(tokenizer, train_texts_only, val_texts_only)
     train_input_ids, train_labels = shift_input_target(train_encodings)
@@ -347,6 +349,11 @@ if __name__ == "__main__":
             attention_mask = (inputs != PAD_TOKEN_ID).int().transpose(0, 1)
             logits = model(inputs, occupation_embeds=occupation_embeds, gender_embeds=gender_embeds,
                            attention_mask=attention_mask)
+
+            # prevent the model from predicting non-activity tokens.
+            logits[:, -1, EOS_TOKEN_ID] = -1e9
+            logits[:, -1, UNK_TOKEN_ID] = -1e9
+            logits[:, -1, PAD_TOKEN_ID] = -1e9
 
             loss = loss_fn(logits[:, -1, :], labels)
             loss.backward()
