@@ -64,12 +64,17 @@ class TransformerLayerWithNorm(nn.Module):
 
 # Usually, the dimension of hidden size equals to position embeddings.
 class CustomGPT1Model(nn.Module):
-    def __init__(self, vocab_size=33, hidden_size=128, occupation_embed_dim=64, gender_embed_dim=8, num_layers=2,
-                 num_heads=2, max_sequence_len=128, dropout=0.2):
+    def __init__(self, vocab_size=33, hidden_size=64, occupation_vocab_size=16, gender_vocab_size=2,
+                 occupation_embed_dim=64, gender_embed_dim=8, num_layers=2, num_heads=2, max_sequence_len=128, dropout=0.2):
         super(CustomGPT1Model, self).__init__()
         self.vocab_size = vocab_size
         self.embeddings = nn.Embedding(vocab_size, hidden_size)
         self.position_embeddings = nn.Embedding(max_sequence_len, hidden_size)
+
+        # Change from a dimension argument to vocab size for embeddings
+        self.occupation_embeddings = nn.Embedding(occupation_vocab_size, occupation_embed_dim)
+        self.gender_embeddings = nn.Embedding(gender_vocab_size, gender_embed_dim)
+
         # self.transformer_layers = nn.ModuleList([
         #     nn.TransformerEncoderLayer(d_model=hidden_size, nhead=num_heads)
         #     for _ in range(num_layers)
@@ -95,31 +100,22 @@ class CustomGPT1Model(nn.Module):
                 init.ones_(module.weight)
                 init.zeros_(module.bias)
 
-    def forward(self, input_ids, occupation_embeds, gender_embeds, attention_mask=None, **kwargs):
+    def forward(self, input_ids, occupation_ids, gender_ids, attention_mask=None, **kwargs):
         token_embeddings = self.embeddings(input_ids)
 
         position_ids = torch.arange(0, input_ids.size(1)).unsqueeze(0).repeat(input_ids.size(0), 1).to(input_ids.device)
         position_embeddings = self.position_embeddings(position_ids)
+
+        # Lookup embeddings using indices
+        occupation_embeds = self.occupation_embeddings(occupation_ids)
+        gender_embeds = self.gender_embeddings(gender_ids)
+
         aggregated_embeds = torch.cat([occupation_embeds, gender_embeds], dim=-1)
         aggregated_embeds_projected = self.embedding_projection(aggregated_embeds).unsqueeze(1)
         embeddings = token_embeddings + position_embeddings + aggregated_embeds_projected
 
         if attention_mask is not None:
             attention_mask = attention_mask == 0
-
-        # for layer in self.transformer_layers:
-        #
-        #     print("After attention mask:", torch.isnan(attention_mask).any())
-        #
-        #     normalized_embeddings = self.layer_norm(embeddings)
-        #
-        #     print("LayerNorm weight:", self.layer_norm.weight)
-        #     print("LayerNorm bias:", self.layer_norm.bias)
-        #     print("After normalized embeddings:", torch.isnan(normalized_embeddings).any())
-        #
-        #     transformer_out = layer(normalized_embeddings, src_key_padding_mask=attention_mask)
-        #     embeddings = transformer_out + embeddings
-        #     embeddings = self.dropout(embeddings)
 
         for layer_with_norm in self.transformer_layers:
             transformer_layer, layer_norm = layer_with_norm.transformer_layer, layer_with_norm.layer_norm
@@ -140,7 +136,6 @@ class CustomGPT1Model(nn.Module):
 
             # Activation Function (ReLU in this case)
             intermediate = F.relu(intermediate)
-
             ff_output = layer_with_norm.transformer_layer.linear2(intermediate)
             ff_residual = ff_output + attention_normalized
 
