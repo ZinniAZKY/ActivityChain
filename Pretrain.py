@@ -227,29 +227,31 @@ def shift_input_target(text_encodings):
     return input_sequences_padded, target_sequences
 
 
-def create_dataset_with_embeddings(shifted_input_ids, shifted_labels, original_texts):
-    occupation_embeds = []
-    gender_embeds = []
+def create_dataset_with_indices(shifted_input_ids, shifted_labels, original_texts):
+    occupation_indices = []
+    gender_indices = []
 
-    # For each original_text, generate embeddings and replicate them for each of the shifted sequences
+    # For each original_text, generate indices and replicate them for each of the shifted sequences
     for text in original_texts:
         person_id, *tokens = text.split()
         person_id = int(person_id)
         attributes = id_to_attributes[person_id]
-        occupation_embed = occupation_embedding(torch.tensor([attributes['occupation']]))
-        gender_embed = gender_embedding(torch.tensor([attributes['gender']]))
 
-        occupation_embeds.extend([occupation_embed] * 12)
-        gender_embeds.extend([gender_embed] * 12)
+        # Append the occupation and gender indices instead of embeddings
+        occupation_index = attributes['occupation']
+        gender_index = attributes['gender']
 
-    # Convert the lists of embeddings to tensors
-    occupation_embeds = torch.cat(occupation_embeds).squeeze(1)
-    gender_embeds = torch.cat(gender_embeds).squeeze(1)
+        occupation_indices.extend([occupation_index] * 12)
+        gender_indices.extend([gender_index] * 12)
+
+    # Convert the lists of indices to tensors
+    occupation_indices = torch.tensor(occupation_indices, dtype=torch.long)
+    gender_indices = torch.tensor(gender_indices, dtype=torch.long)
 
     # Ensure the lengths match
-    assert len(shifted_input_ids) == len(occupation_embeds) == len(gender_embeds)
+    assert len(shifted_input_ids) == len(occupation_indices) == len(gender_indices)
 
-    return TensorDataset(shifted_input_ids, shifted_labels, occupation_embeds, gender_embeds)
+    return TensorDataset(shifted_input_ids, shifted_labels, occupation_indices, gender_indices)
 
 
 def calculate_metrics(preds, labels):
@@ -270,13 +272,12 @@ def evaluate_model(model, dataloader, loss_fn):
 
     with torch.no_grad():
         for batch in dataloader:
-            inputs, labels, occupation_embeds, gender_embeds = batch
-            inputs, labels, occupation_embeds, gender_embeds = inputs.to(device), labels.to(
-                device), occupation_embeds.to(device), gender_embeds.to(device)
+            inputs, labels, occupation_ids, gender_ids = batch
+            inputs, labels, occupation_ids, gender_ids = inputs.to(device), labels.to(
+                device), occupation_ids.to(device), gender_ids.to(device)
             attention_mask = (inputs != PAD_TOKEN_ID).int().transpose(0, 1)
 
-            logits = model(inputs, occupation_embeds=occupation_embeds, gender_embeds=gender_embeds,
-                           attention_mask=attention_mask)
+            logits = model(inputs, occupation_ids=occupation_ids, gender_ids=gender_ids, attention_mask=attention_mask)
 
             loss = loss_fn(logits[:, -1, :], labels)
             total_loss += loss.item()
@@ -306,8 +307,8 @@ if __name__ == "__main__":
     val_input_ids, val_labels = shift_input_target(val_encodings)
 
     batch_size = 128
-    train_dataset = create_dataset_with_embeddings(train_input_ids, train_labels, train_texts)
-    val_dataset = create_dataset_with_embeddings(val_input_ids, val_labels, val_texts)
+    train_dataset = create_dataset_with_indices(train_input_ids, train_labels, train_texts)
+    val_dataset = create_dataset_with_indices(val_input_ids, val_labels, val_texts)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
@@ -339,15 +340,12 @@ if __name__ == "__main__":
             optimizer.zero_grad()
 
             # Splitting the batch to its individual components
-            inputs, labels, occupation_embeds, gender_embeds = batch
-            inputs, labels, occupation_embeds, gender_embeds = inputs.to(device), labels.to(device), occupation_embeds.to(
-                device), gender_embeds.to(device)
-
-            occupation_embeds = occupation_embeds.detach().to(device)
-            gender_embeds = gender_embeds.detach().to(device)
+            inputs, labels, occupation_indices, gender_indices = batch
+            inputs, labels, occupation_indices, gender_indices = inputs.to(device), labels.to(
+                device), occupation_indices.to(device), gender_indices.to(device)
 
             attention_mask = (inputs != PAD_TOKEN_ID).int().transpose(0, 1)
-            logits = model(inputs, occupation_embeds=occupation_embeds, gender_embeds=gender_embeds,
+            logits = model(inputs, occupation_ids=occupation_indices, gender_ids=gender_indices,
                            attention_mask=attention_mask)
 
             # prevent the model from predicting non-activity tokens.
