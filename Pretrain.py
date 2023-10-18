@@ -180,7 +180,7 @@ from transformers import PreTrainedTokenizerFast, get_linear_schedule_with_warmu
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import precision_recall_fscore_support
 from collections import Counter
-from Embedding import occupation_embedding, gender_embedding, id_to_attributes
+from Embedding import id_to_attributes
 import numpy as np
 import torch.nn.functional as F
 
@@ -275,7 +275,7 @@ def evaluate_model(model, dataloader, loss_fn):
             inputs, labels, occupation_ids, gender_ids = batch
             inputs, labels, occupation_ids, gender_ids = inputs.to(device), labels.to(
                 device), occupation_ids.to(device), gender_ids.to(device)
-            attention_mask = (inputs != PAD_TOKEN_ID).int().transpose(0, 1)
+            attention_mask = (inputs != PAD_TOKEN_ID).int()
 
             logits = model(inputs, occupation_ids=occupation_ids, gender_ids=gender_ids, attention_mask=attention_mask)
 
@@ -306,7 +306,7 @@ if __name__ == "__main__":
     train_input_ids, train_labels = shift_input_target(train_encodings)
     val_input_ids, val_labels = shift_input_target(val_encodings)
 
-    batch_size = 128
+    batch_size = 1024
     train_dataset = create_dataset_with_indices(train_input_ids, train_labels, train_texts)
     val_dataset = create_dataset_with_indices(val_input_ids, val_labels, val_texts)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -319,7 +319,7 @@ if __name__ == "__main__":
     loss_fn = torch.nn.CrossEntropyLoss()
 
     learning_rate = 0.000002
-    num_epochs = 15
+    num_epochs = 50
     num_train_steps = len(train_dataloader) * num_epochs
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
     scheduler = get_linear_schedule_with_warmup(
@@ -343,8 +343,7 @@ if __name__ == "__main__":
             inputs, labels, occupation_indices, gender_indices = batch
             inputs, labels, occupation_indices, gender_indices = inputs.to(device), labels.to(
                 device), occupation_indices.to(device), gender_indices.to(device)
-
-            attention_mask = (inputs != PAD_TOKEN_ID).int().transpose(0, 1)
+            attention_mask = (inputs != PAD_TOKEN_ID).int()
             logits = model(inputs, occupation_ids=occupation_indices, gender_ids=gender_indices,
                            attention_mask=attention_mask)
 
@@ -355,7 +354,7 @@ if __name__ == "__main__":
 
             loss = loss_fn(logits[:, -1, :], labels)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
 
