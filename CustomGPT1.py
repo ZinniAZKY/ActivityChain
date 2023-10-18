@@ -64,31 +64,24 @@ class TransformerLayerWithNorm(nn.Module):
 
 # Usually, the dimension of hidden size equals to position embeddings.
 class CustomGPT1Model(nn.Module):
-    def __init__(self, vocab_size=33, hidden_size=64, occupation_vocab_size=16, gender_vocab_size=2,
+    def __init__(self, vocab_size=33, hidden_size=256, occupation_vocab_size=16, gender_vocab_size=2,
                  occupation_embed_dim=64, gender_embed_dim=8, num_layers=2, num_heads=2, max_sequence_len=128, dropout=0.2):
         super(CustomGPT1Model, self).__init__()
         self.vocab_size = vocab_size
         self.embeddings = nn.Embedding(vocab_size, hidden_size)
         self.position_embeddings = nn.Embedding(max_sequence_len, hidden_size)
-
-        # Change from a dimension argument to vocab size for embeddings
         self.occupation_embeddings = nn.Embedding(occupation_vocab_size, occupation_embed_dim)
         self.gender_embeddings = nn.Embedding(gender_vocab_size, gender_embed_dim)
-
-        # self.transformer_layers = nn.ModuleList([
-        #     nn.TransformerEncoderLayer(d_model=hidden_size, nhead=num_heads)
-        #     for _ in range(num_layers)
-        # ])
         self.transformer_layers = nn.ModuleList([
             TransformerLayerWithNorm(hidden_size, num_heads)
             for _ in range(num_layers)
         ])
-        # self.layer_norm = nn.LayerNorm(hidden_size)
         self.output_layer = nn.Linear(hidden_size, vocab_size)
         self.dropout = nn.Dropout(dropout)
         self.occupation_embed_dim = occupation_embed_dim
         self.gender_embed_dim = gender_embed_dim
         self.embedding_projection = nn.Linear(occupation_embed_dim + gender_embed_dim, hidden_size)
+        self.d_model = hidden_size
 
     def initialize_weights(self):
         for module in self.modules():
@@ -102,11 +95,9 @@ class CustomGPT1Model(nn.Module):
 
     def forward(self, input_ids, occupation_ids, gender_ids, attention_mask=None, **kwargs):
         token_embeddings = self.embeddings(input_ids)
-
         position_ids = torch.arange(0, input_ids.size(1)).unsqueeze(0).repeat(input_ids.size(0), 1).to(input_ids.device)
         position_embeddings = self.position_embeddings(position_ids)
 
-        # Lookup embeddings using indices
         occupation_embeds = self.occupation_embeddings(occupation_ids)
         gender_embeds = self.gender_embeddings(gender_ids)
 
@@ -114,41 +105,36 @@ class CustomGPT1Model(nn.Module):
         aggregated_embeds_projected = self.embedding_projection(aggregated_embeds).unsqueeze(1)
         embeddings = token_embeddings + position_embeddings + aggregated_embeds_projected
 
-        if attention_mask is not None:
-            attention_mask = attention_mask == 0
-
         for layer_with_norm in self.transformer_layers:
             transformer_layer, layer_norm = layer_with_norm.transformer_layer, layer_with_norm.layer_norm
+
+            # LayerNorm before Self Attention
             normalized_embeddings = layer_norm(embeddings)
 
-            # Self Attention/Added
-            attention_output, _ = layer_with_norm.transformer_layer.self_attn(normalized_embeddings,
-                                                                              normalized_embeddings,
-                                                                              normalized_embeddings)
+            attention_scores = torch.matmul(normalized_embeddings, normalized_embeddings.transpose(-1, -2)) / math.sqrt(self.d_model)
+            if attention_mask is not None:
+                extended_attention_mask = (1.0 - attention_mask.unsqueeze(1)) * -1e9
+                attention_scores = attention_scores + extended_attention_mask
 
-            attention_residual = attention_output + normalized_embeddings
+            attention_probs = torch.nn.functional.softmax(attention_scores, dim=-1)
+            attention_output = torch.matmul(attention_probs, normalized_embeddings)
 
-            # Layer Normalization after Self Attention
-            attention_normalized = layer_norm(attention_residual)
+            # Residual connection after self-attention
+            attention_output += embeddings
+
+            # LayerNorm before Feed Forward
+            normalized_attention_output = layer_norm(attention_output)
 
             # Feed Forward
-            intermediate = layer_with_norm.transformer_layer.linear1(attention_normalized)
-
-            # Activation Function (ReLU in this case)
+            intermediate = transformer_layer.linear1(normalized_attention_output)
             intermediate = F.relu(intermediate)
-            ff_output = layer_with_norm.transformer_layer.linear2(intermediate)
-            ff_residual = ff_output + attention_normalized
+            ff_output = transformer_layer.linear2(intermediate)
 
-            # Layer Normalization after Feed Forward
-            ff_normalized = layer_norm(ff_residual)
+            # Residual connection after feed-forward
+            ff_output += attention_output
 
-            # Output of this transformer layer/end of Added
-            transformer_out = ff_normalized
-
-            # # Original code
-            # transformer_out = transformer_layer(normalized_embeddings, src_key_padding_mask=attention_mask)
-
-            embeddings = transformer_out
+            # Assigning the output to embeddings for the next loop iteration
+            embeddings = ff_output
             embeddings = self.dropout(embeddings)
 
         logits = self.output_layer(embeddings)
