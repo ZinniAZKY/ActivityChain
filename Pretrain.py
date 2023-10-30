@@ -9,6 +9,20 @@ import numpy as np
 import torch.nn.functional as F
 
 
+import math
+# from CustomGPT1 import CustomGPT1Model
+# from FocalLoss import WeightedFocalLoss
+# import torch
+# from transformers import PreTrainedTokenizerFast
+# from torch.utils.data import DataLoader, TensorDataset
+# import numpy as np
+# from sklearn.metrics import precision_recall_fscore_support
+# from transformers import get_linear_schedule_with_warmup
+# from collections import Counter
+# import torch.nn.functional as F
+# from torch.optim.lr_scheduler import CosineAnnealingLR
+# 
+# 
 # def load_texts_from_file(filename):
 #     with open(filename, "r", encoding="utf-8") as f:
 #         return [line.strip() for line in f.readlines()]
@@ -77,7 +91,7 @@ import torch.nn.functional as F
 # train_texts = load_texts_from_file(train_file)
 # val_texts = load_texts_from_file(val_file)
 # tokenizer = PreTrainedTokenizerFast(tokenizer_file="/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer.json")
-# batch_size = 1024
+# batch_size = 256
 # learning_rate = 0.000005
 # num_epochs = 15
 # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -100,17 +114,16 @@ import torch.nn.functional as F
 # all_token_ids = list(tokenizer.get_vocab().values())
 # token_to_id = tokenizer.get_vocab()
 # id_to_token = {v: k for k, v in token_to_id.items()}
-# token_weights = {token_id: 1.0 for token_id in all_token_ids}
-# # max_weight = max(weight_counts.values())
-# 
-# # for token_id, count in weight_counts.items():
-# #     token_weights[token_id] = max_weight / count
-# 
-# token_weights[token_to_id["House"]] = token_weights[token_to_id["House"]] * 0.375
-# # token_weights[token_to_id["Office"]] = token_weights[token_to_id["Office"]] * 0.6
+# token_weights = {token_id: 1 for token_id in all_token_ids}
+# max_weight = max(weight_counts.values())
+# smoothing_factor = 10
+# smoothed_weights = {token_id: max_weight / (count + smoothing_factor) for token_id, count in weight_counts.items()}
+# max_allowed_weight = 10
+# capped_weights = {k: min(v, max_allowed_weight) for k, v in smoothed_weights.items()}
+# # token_weights[token_to_id["House"]] = token_weights[token_to_id["House"]] * 0.3
 # class_weights_tensor = torch.zeros(len(all_token_ids), dtype=torch.float).to(device)
 # 
-# for token_id, weight in token_weights.items():
+# for token_id, weight in capped_weights.items():
 #     class_weights_tensor[token_id] = weight
 # 
 # train_dataset = TensorDataset(train_input_ids, train_labels)
@@ -123,15 +136,19 @@ import torch.nn.functional as F
 # model.initialize_weights()
 # tokenizer_vocab_size = len(tokenizer.get_vocab())
 # 
-# loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights_tensor)
+# # loss_fn = torch.nn.CrossEntropyLoss()
+# # loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights_tensor)
+# loss_fn = WeightedFocalLoss(alpha=0.25, gamma=2.5)
+# # loss_fn = WeightedFocalLoss(alpha=0.25, gamma=4, class_weights=class_weights_tensor)
 # 
-# optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
+# optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
 # num_train_steps = len(train_dataloader) * num_epochs
-# scheduler = get_linear_schedule_with_warmup(
-#     optimizer,
-#     num_warmup_steps=0.01 * num_train_steps,
-#     num_training_steps=num_train_steps
-# )
+# # scheduler = get_linear_schedule_with_warmup(
+# #     optimizer,
+# #     num_warmup_steps=0.01 * num_train_steps,
+# #     num_training_steps=num_train_steps
+# # )
+# scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0)
 # 
 # for epoch in range(num_epochs):
 #     model.train()
@@ -161,7 +178,7 @@ import torch.nn.functional as F
 #                 average_grad_norm += param.grad.data.norm(2).item()
 #                 num_grads += 1
 # 
-#         print_frequency = 100  # For example, adjust as needed
+#         print_frequency = 100
 #         if step % print_frequency == 0:
 #             print(f"Epoch: {epoch}, Step: {step}, Average Gradient Norm: {average_grad_norm:.4f}")
 # 
