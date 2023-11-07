@@ -7,20 +7,7 @@ from collections import Counter
 from Embedding import id_to_attributes
 import numpy as np
 import torch.nn.functional as F
-
-
 import math
-# from CustomGPT1 import CustomGPT1Model
-# from FocalLoss import WeightedFocalLoss
-# import torch
-# from transformers import PreTrainedTokenizerFast
-# from torch.utils.data import DataLoader, TensorDataset
-# import numpy as np
-# from sklearn.metrics import precision_recall_fscore_support
-# from transformers import get_linear_schedule_with_warmup
-# from collections import Counter
-# import torch.nn.functional as F
-# from torch.optim.lr_scheduler import CosineAnnealingLR
 # 
 # 
 # def load_texts_from_file(filename):
@@ -227,6 +214,18 @@ import math
 #     torch.save(model, f'/home/ubuntu/Documents/model_{epoch + 1}.pth')
 
 
+from CustomGPT1 import CustomGPT1Model
+import torch
+from transformers import PreTrainedTokenizerFast, get_linear_schedule_with_warmup
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.metrics import precision_recall_fscore_support
+from collections import Counter
+from Embedding import id_to_attributes
+import numpy as np
+import torch.nn.functional as F
+from FocalLoss import WeightedFocalLoss
+
+
 def load_data(train_file, val_file):
     with open(train_file, "r", encoding="utf-8") as f:
         train_texts = [line.strip() for line in f.readlines()]
@@ -243,6 +242,7 @@ def load_data(train_file, val_file):
 def tokenize_data(tokenizer, train_texts_only, val_texts_only):
     train_encodings = tokenizer(train_texts_only, padding=True, truncation=True, max_length=48)
     val_encodings = tokenizer(val_texts_only, padding=True, truncation=True, max_length=48)
+
     return train_encodings, val_encodings
 
 
@@ -270,30 +270,27 @@ def shift_input_target(text_encodings):
 
 
 def create_dataset_with_indices(shifted_input_ids, shifted_labels, original_texts):
-    occupation_indices = []
-    gender_indices = []
+    combined_indices = []
+    # Assume you have these maximums calculated or set beforehand
+    occu_max = max(id_to_attributes.values(), key=lambda x: x['occupation'])['occupation'] + 1
+    gender_max = max(id_to_attributes.values(), key=lambda x: x['gender'])['gender'] + 1
+    age_max = max(id_to_attributes.values(), key=lambda x: x['age'])['age'] + 1
+    base = occu_max * gender_max * age_max  # This is the base for your mixed-base calculation
 
-    # For each original_text, generate indices and replicate them for each of the shifted sequences
     for text in original_texts:
         person_id, *tokens = text.split()
         person_id = int(person_id)
-        attributes = id_to_attributes[person_id]
-
-        # Append the occupation and gender indices instead of embeddings
+        attributes = id_to_attributes.get(person_id, {'occupation': 0, 'gender': 0, 'age': 0})
         occupation_index = attributes['occupation']
         gender_index = attributes['gender']
+        age_index = attributes['age']
+        combined_id = (age_index * gender_max * occu_max) + (gender_index * occu_max) + occupation_index
+        combined_indices.extend([combined_id] * 12)  # 12 is the length of the shifted sequences
 
-        occupation_indices.extend([occupation_index] * 12)
-        gender_indices.extend([gender_index] * 12)
+    combined_indices = torch.tensor(combined_indices, dtype=torch.long)
+    assert len(shifted_input_ids) == len(combined_indices)  # Ensuring the tensor sizes match
 
-    # Convert the lists of indices to tensors
-    occupation_indices = torch.tensor(occupation_indices, dtype=torch.long)
-    gender_indices = torch.tensor(gender_indices, dtype=torch.long)
-
-    # Ensure the lengths match
-    assert len(shifted_input_ids) == len(occupation_indices) == len(gender_indices)
-
-    return TensorDataset(shifted_input_ids, shifted_labels, occupation_indices, gender_indices)
+    return TensorDataset(shifted_input_ids, shifted_labels, combined_indices)
 
 
 def calculate_metrics(preds, labels):
@@ -314,12 +311,14 @@ def evaluate_model(model, dataloader, loss_fn):
 
     with torch.no_grad():
         for batch in dataloader:
-            inputs, labels, occupation_ids, gender_ids = batch
-            inputs, labels, occupation_ids, gender_ids = inputs.to(device), labels.to(
-                device), occupation_ids.to(device), gender_ids.to(device)
+            inputs, labels, combined_indices = batch
+            inputs, labels, combined_indices = inputs.to(device), labels.to(device), combined_indices.to(device)
             attention_mask = (inputs != PAD_TOKEN_ID).int()
+            logits = model(inputs, combined_indices=combined_indices, attention_mask=attention_mask)
 
-            logits = model(inputs, occupation_ids=occupation_ids, gender_ids=gender_ids, attention_mask=attention_mask, use_embeds=False)
+            logits[:, -1, EOS_TOKEN_ID] = -1e9
+            logits[:, -1, UNK_TOKEN_ID] = -1e9
+            logits[:, -1, PAD_TOKEN_ID] = -1e9
 
             loss = loss_fn(logits[:, -1, :], labels)
             total_loss += loss.item()
@@ -333,8 +332,8 @@ def evaluate_model(model, dataloader, loss_fn):
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    train_file = "/home/ubuntu/Documents/TokyoPT/PTChain/IDcombinedhalfTrain (copy 1).txt"
-    val_file = "/home/ubuntu/Documents/TokyoPT/PTChain/IDcombinedhalfEval (copy 1).txt"
+    train_file = "/home/ubuntu/Documents/TokyoPT/PTChain/IDNoAllHome618Train.txt"
+    val_file = "/home/ubuntu/Documents/TokyoPT/PTChain/IDNoAllHome618Eval.txt"
     train_texts, val_texts, train_texts_only, val_texts_only = load_data(train_file, val_file)
 
     tokenizer = PreTrainedTokenizerFast(tokenizer_file="/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer.json")
@@ -343,12 +342,27 @@ if __name__ == "__main__":
     PAD_TOKEN_ID = tokenizer.convert_tokens_to_ids("[PAD]")
     EOS_TOKEN_ID = tokenizer.convert_tokens_to_ids("[EOS]")
     UNK_TOKEN_ID = tokenizer.convert_tokens_to_ids("[UNK]")
-
     train_encodings, val_encodings = tokenize_data(tokenizer, train_texts_only, val_texts_only)
+
     train_input_ids, train_labels = shift_input_target(train_encodings)
     val_input_ids, val_labels = shift_input_target(val_encodings)
 
+    # Initialize class weights with default value of 1 for each token ID
+    all_token_ids = list(tokenizer.get_vocab().values())  # Retrieve all token IDs from the tokenizer
+    class_weights_tensor = torch.ones(len(all_token_ids), dtype=torch.float).to(device)  # Create a tensor of ones
+
+    # Modify the weight manually
+    token_to_id = tokenizer.get_vocab()  # Get the mapping from tokens to their respective IDs
+    house_token_id = token_to_id["House"]
+    backhome_token_id = token_to_id['Back_Home']
+    office_token_id = token_to_id["Office"]
+    class_weights_tensor[house_token_id] = 0.925
+    class_weights_tensor[backhome_token_id] = 0.975
+    class_weights_tensor[office_token_id] = 0.925
+
     batch_size = 1024
+    learning_rate = 0.00000005
+    num_epochs = 50
     train_dataset = create_dataset_with_indices(train_input_ids, train_labels, train_texts)
     val_dataset = create_dataset_with_indices(val_input_ids, val_labels, val_texts)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -358,10 +372,8 @@ if __name__ == "__main__":
     model.initialize_weights()
     model.to(device)
     tokenizer_vocab_size = len(tokenizer.get_vocab())
-    loss_fn = torch.nn.CrossEntropyLoss()
-
-    learning_rate = 0.000002
-    num_epochs = 50
+    # loss_fn = torch.nn.CrossEntropyLoss()
+    loss_fn = WeightedFocalLoss(alpha=0.25, gamma=2, class_weights=class_weights_tensor)
     num_train_steps = len(train_dataloader) * num_epochs
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
     scheduler = get_linear_schedule_with_warmup(
@@ -382,34 +394,31 @@ if __name__ == "__main__":
             optimizer.zero_grad()
 
             # Splitting the batch to its individual components
-            inputs, labels, occupation_indices, gender_indices = batch
-            inputs, labels, occupation_indices, gender_indices = inputs.to(device), labels.to(
-                device), occupation_indices.to(device), gender_indices.to(device)
+            inputs, labels, combined_indices = batch
+            inputs, labels, combined_indices = inputs.to(device), labels.to(device), combined_indices.to(device)
             attention_mask = (inputs != PAD_TOKEN_ID).int()
-            logits = model(inputs, occupation_ids=occupation_indices, gender_ids=gender_indices,
-                           attention_mask=attention_mask, use_embeds=False)
+            logits = model(inputs, combined_indices=combined_indices, attention_mask=attention_mask)
 
-            # prevent the model from predicting non-activity tokens.
             logits[:, -1, EOS_TOKEN_ID] = -1e9
             logits[:, -1, UNK_TOKEN_ID] = -1e9
             logits[:, -1, PAD_TOKEN_ID] = -1e9
 
             loss = loss_fn(logits[:, -1, :], labels)
             loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
 
             total_loss += loss.item()
-
-            preds = np.argmax(logits[:, -1, :].detach().cpu().numpy(), axis=-1).flatten()
+            probs = F.softmax(logits[:, -1, :], dim=-1).detach().cpu().numpy()
+            preds = [np.random.choice(len(p), p=p) for p in probs]
+            preds = np.array(preds).flatten()
             labels = labels.detach().cpu().numpy().flatten()
             correct_preds = (preds == labels).sum()
             total_correct_preds += correct_preds
             total_preds.extend(preds)
             total_labels.extend(labels)
 
-            if step % 100 == 0:
+            if step % 250 == 0:
                 print(f"Epoch {epoch + 1}/{num_epochs} | Step {step}/{len(train_dataloader)} | Loss: {loss.item():.8f}")
 
         average_train_loss = total_loss / len(train_dataloader)
