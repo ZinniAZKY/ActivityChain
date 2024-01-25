@@ -40,7 +40,7 @@ import os
 #     for directory in directories:
 #         input_csv = glob.glob(f'{base_path}/{directory}/**/*.csv', recursive=True)
 #
-#         with mp.Pool(processes=6) as pool:
+#         with mp.Pool(processes=4) as pool:
 #             result_df = pool.map(process_df, input_csv)
 #
 #         all_df = pd.concat(result_df)
@@ -62,7 +62,7 @@ import os
 #     main()
 
 
-NUM_POOL = 6
+NUM_POOL = 4
 
 
 # 生成出行链，原始数据在PTMerged文件夹，生成数据分别在PTActivity和PTChain中，读取的字典在RegionPurposeCode中
@@ -103,12 +103,34 @@ def process_activities(group, activity_dict, activity_dict_next):
     return group
 
 
+def modify_Back_home(data):
+    # Generate a sequence number for each trip id within each person id
+    data['trip_seq'] = data.groupby(['Person id', 'trip id']).cumcount() + 1
+
+    # For each 'trip id' with purpose '3', mark the second occurrence (sequence number 2)
+    is_second_occurrence = (data['activity'] == "3") & (data['trip_seq'] == 2)
+
+    # Find the indices to change - the next two rows after the second occurrence
+    indices_to_change = data.index[is_second_occurrence].to_series().apply(lambda x: [x+1, x+2]).explode()
+
+    # Change 'purpose' to '99' for the identified rows
+    data.loc[indices_to_change, 'activity'] = "99"
+
+    # Drop the temporary column
+    data.drop(columns=['trip_seq'], inplace=True)
+
+    return data
+
+
 def reassign_activity(file):
     merged_data = pd.read_csv(file)
     merged_data['purpose'] = merged_data['purpose'].astype(str)
     merged_data['activity'] = merged_data['purpose']
     merged_data.sort_values(['Person id', 'trip id', 'subtrip id', 'date'], inplace=True)
     merged_data.reset_index(drop=True, inplace=True)
+
+    # Preprocess data to modify 'staying at home' activities
+    merged_data = modify_Back_home(merged_data)
 
     staypoint_codes = pd.read_csv('/Users/zhangkunyi/Downloads/RegionPurposeCode/PurposeToActivity.csv')
     activity_dict_next = pd.Series(staypoint_codes.activity.values, index=staypoint_codes.purpose).to_dict()
