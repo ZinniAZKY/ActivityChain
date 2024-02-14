@@ -6,63 +6,62 @@ import multiprocessing as mp
 from multiprocessing import Pool
 import os
 
+# 转换原始PT为OD数据（只保留一天，其他天数删除）
+def process_df(file):
+    column_names = ['Person id', 'trip id', 'subtrip id', 'date', 'lon', 'lat', 'gender', 'age', 'address code', 'occupation', 'purpose', 'mag factor1', 'mag factor2', 'transport mode']
+    input_df = pd.read_csv(file, header=None)
+    input_df.columns = column_names
 
-# # 转换原始PT为OD数据（只保留一天，其他天数删除）
-# def process_df(file):
-#     column_names = ['Person id', 'trip id', 'subtrip id', 'date', 'lon', 'lat', 'gender', 'age', 'address code', 'occupation', 'purpose', 'mag factor1', 'mag factor2', 'transport mode']
-#     input_df = pd.read_csv(file, header=None)
-#     input_df.columns = column_names
-#
-#     input_df['date'] = pd.to_datetime(input_df['date'])
-#     input_df.sort_values(['Person id', 'trip id', 'subtrip id'], inplace=True)
-#     input_df.reset_index(drop=True, inplace=True)
-#
-#     start_date = input_df.loc[0, 'date'].date()
-#     if input_df.loc[0, 'date'].time() != pd.Timestamp(0).time():
-#         print(f"Start time for file {file} is not at the beginning of a day.")
-#
-#     original_length = len(input_df)
-#     input_df = input_df[input_df['date'].dt.date == start_date]
-#     if len(input_df) < original_length:
-#         print(f"Some rows removed for file {file}. Original length: {original_length}. New length: {len(input_df)}.")
-#
-#     grouped_df = input_df.groupby(['Person id', 'trip id', 'subtrip id'])
-#     processed_df = pd.concat([grouped_df.first(), grouped_df.last()])
-#     processed_df.reset_index(inplace=True)
-#
-#     return processed_df
-#
-#
-# def main():
-#     base_path = '/Users/zhangkunyi/Downloads/PTFolder'
-#     directories = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d)) and 'PTOriginal' in d]
-#
-#     for directory in directories:
-#         input_csv = glob.glob(f'{base_path}/{directory}/**/*.csv', recursive=True)
-#
-#         with mp.Pool(processes=4) as pool:
-#             result_df = pool.map(process_df, input_csv)
-#
-#         all_df = pd.concat(result_df)
-#         all_df.sort_values(['Person id', 'trip id', 'subtrip id'], inplace=True)
-#         groups = all_df.groupby('Person id')
-#
-#         for name, group in groups:
-#             group = group.sort_values('date').reset_index(drop=True)
-#             group = group.iloc[1:-1]
-#             count_df = group['date'].value_counts().reset_index()
-#             count_df.columns = ['date', 'count']
-#             if any(count_df['count'] != 2):
-#                 print(f"Person {name} does not have all date occurs twice")
-#
-#         all_df.to_csv(f'{base_path}/{directory.replace("PTOriginal", "PTMerged")}.csv', index=False)
-#
-#
-# if __name__ == '__main__':
-#     main()
+    input_df['date'] = pd.to_datetime(input_df['date'])
+    input_df.sort_values(['Person id', 'trip id', 'subtrip id'], inplace=True)
+    input_df.reset_index(drop=True, inplace=True)
+
+    start_date = input_df.loc[0, 'date'].date()
+    if input_df.loc[0, 'date'].time() != pd.Timestamp(0).time():
+        print(f"Start time for file {file} is not at the beginning of a day.")
+
+    original_length = len(input_df)
+    input_df = input_df[input_df['date'].dt.date == start_date]
+    if len(input_df) < original_length:
+        print(f"Some rows removed for file {file}. Original length: {original_length}. New length: {len(input_df)}.")
+
+    grouped_df = input_df.groupby(['Person id', 'trip id', 'subtrip id'])
+    processed_df = pd.concat([grouped_df.first(), grouped_df.last()])
+    processed_df.reset_index(inplace=True)
+
+    return processed_df
 
 
-NUM_POOL = 4
+def main():
+    base_path = '/Users/zhangkunyi/Downloads/PTFolder'
+    directories = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d)) and 'PTOriginal' in d]
+
+    for directory in directories:
+        input_csv = glob.glob(f'{base_path}/{directory}/**/*.csv', recursive=True)
+
+        with mp.Pool(processes=4) as pool:
+            result_df = pool.map(process_df, input_csv)
+
+        all_df = pd.concat(result_df)
+        all_df.sort_values(['Person id', 'trip id', 'subtrip id'], inplace=True)
+        groups = all_df.groupby('Person id')
+
+        for name, group in groups:
+            group = group.sort_values('date').reset_index(drop=True)
+            group = group.iloc[1:-1]
+            count_df = group['date'].value_counts().reset_index()
+            count_df.columns = ['date', 'count']
+            if any(count_df['count'] != 2):
+                print(f"Person {name} does not have all date occurs twice")
+
+        all_df.to_csv(f'{base_path}/{directory.replace("PTOriginal", "PTMerged")}.csv', index=False)
+
+
+if __name__ == '__main__':
+    main()
+
+
+NUM_POOL = 6
 
 
 # 生成出行链，原始数据在PTMerged文件夹，生成数据分别在PTActivity和PTChain中，读取的字典在RegionPurposeCode中
@@ -86,8 +85,8 @@ def process_activities(group, activity_dict, activity_dict_next):
     for activity in set(activity_dict.values()):
         if activity != 'House':
             check_next_act = (group['activity'] == activity) & \
-                                              (group['activity'].shift(-1) != activity) & \
-                                              (group['activity'].shift(-1) != 'House')
+                             (group['activity'].shift(-1) != activity) & \
+                             (group['activity'].shift(-1) != 'House')
 
             if check_next_act.any():
                 print(
@@ -103,20 +102,25 @@ def process_activities(group, activity_dict, activity_dict_next):
     return group
 
 
-def modify_Back_home(data):
+def modify_activity(data):
     # Generate a sequence number for each trip id within each person id
     data['trip_seq'] = data.groupby(['Person id', 'trip id']).cumcount() + 1
 
-    # For each 'trip id' with purpose '3', mark the second occurrence (sequence number 2)
-    is_second_occurrence = (data['activity'] == "3") & (data['trip_seq'] == 2)
+    # For each pair of consecutive rows within the same group, check if they have the same activity and transportation mode
+    same_activity_transport = (data['activity'] == data['activity'].shift()) & (
+            data['transport mode'] == data['transport mode'].shift())
 
-    # Find the indices to change - the next two rows after the second occurrence
-    indices_to_change = data.index[is_second_occurrence].to_series().apply(lambda x: [x+1, x+2]).explode()
+    # Find indices where the next two rows are continuous and have transportation mode 97 and same activity
+    indices_to_change = []
+    for idx in data.index[same_activity_transport]:
+        # Ensure the next two indices are continuous and within the bounds of the DataFrame
+        if idx + 2 < len(data) and data.loc[idx + 1, 'Person id'] == data.loc[idx, 'Person id'] and data.loc[idx + 2, 'Person id'] == data.loc[idx, 'Person id']:
+            if data.loc[idx + 1, 'transport mode'] == 97 and data.loc[idx + 2, 'transport mode'] == 97:
+                if data.loc[idx + 1, 'activity'] == data.loc[idx, 'activity'] and data.loc[idx + 2, 'activity'] == data.loc[idx, 'activity']:
+                    indices_to_change.extend([idx + 1, idx + 2])
 
-    # Change 'purpose' to '99' for the identified rows
-    data.loc[indices_to_change, 'activity'] = "99"
-
-    # Drop the temporary column
+    # Change 'activity' to '99' for the identified rows
+    data.loc[indices_to_change, 'activity'] = '99'
     data.drop(columns=['trip_seq'], inplace=True)
 
     return data
@@ -130,7 +134,7 @@ def reassign_activity(file):
     merged_data.reset_index(drop=True, inplace=True)
 
     # Preprocess data to modify 'staying at home' activities
-    merged_data = modify_Back_home(merged_data)
+    merged_data = modify_activity(merged_data)
 
     staypoint_codes = pd.read_csv('/Users/zhangkunyi/Downloads/RegionPurposeCode/PurposeToActivity.csv')
     activity_dict_next = pd.Series(staypoint_codes.activity.values, index=staypoint_codes.purpose).to_dict()
@@ -141,7 +145,7 @@ def reassign_activity(file):
     activity_dict = pd.Series(activity_codes.purpose.values, index=activity_codes.code).to_dict()
 
     merged_data['activity'] = merged_data['activity'].replace(activity_dict)
-    grouped_data = merged_data.groupby('Person id').apply(process_activities, activity_dict, activity_dict_next).reset_index(drop=True)
+    grouped_data = merged_data.groupby('Person id', group_keys=True).apply(process_activities, activity_dict, activity_dict_next).reset_index(drop=True)
 
     base_act, ext = os.path.splitext(file)
     base_act = base_act.replace("PTMerged", "")
