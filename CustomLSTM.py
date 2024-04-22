@@ -1,12 +1,29 @@
 import torch
 import torch.nn as nn
-import torch.nn.init as init
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
-import numpy as np
+import torch.nn.functional as F
 import json
+import numpy as np
+from nltk.translate.bleu_score import sentence_bleu
+from nltk.tokenize import word_tokenize
+from nltk.translate.bleu_score import SmoothingFunction
+import difflib
 
 torch.manual_seed(42)
+
+
+def calculate_bleu(reference, candidate):
+    smoothie = SmoothingFunction().method4
+    return sentence_bleu([word_tokenize(reference)], word_tokenize(candidate), smoothing_function=smoothie)
+
+
+def calculate_lcss(seq1, seq2):
+    matcher = difflib.SequenceMatcher(None, seq1, seq2)
+    match = matcher.find_longest_match(0, len(seq1), 0, len(seq2))
+    lcss_length = match.size
+    max_length = max(len(seq1), len(seq2))
+    return lcss_length / max_length if max_length > 0 else 0
 
 
 class JSONTokenizer:
@@ -92,11 +109,13 @@ def train_and_validate(model, train_dataset, val_dataset, batch_size, num_epochs
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.AdamW(model.parameters(), lr=lr)
 
     for epoch in range(num_epochs):
         model.train()
         total_train_loss = 0
+        total_train_accuracy = 0
+
         for inputs, targets in train_dataloader:
             inputs, targets = inputs.to(device), targets.to(device)
             model.zero_grad()
@@ -105,20 +124,45 @@ def train_and_validate(model, train_dataset, val_dataset, batch_size, num_epochs
             loss.backward()
             optimizer.step()
             total_train_loss += loss.item()
+
+            # Calculate accuracy
+            _, predicted = outputs.max(2)  # Get the index of the max log-probability
+            total_train_accuracy += (predicted == targets).float().mean().item()
+
         avg_train_loss = total_train_loss / len(train_dataloader)
+        avg_train_accuracy = total_train_accuracy / len(train_dataloader)
 
         # Validation
         model.eval()
         total_val_loss = 0
+        total_val_accuracy = 0
+        bleu_scores = []
+        lcss_scores = []
+
         with torch.no_grad():
             for inputs, targets in val_dataloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 outputs = model(inputs)
                 loss = criterion(outputs.transpose(1, 2), targets)
                 total_val_loss += loss.item()
-        avg_val_loss = total_val_loss / len(val_dataloader)
 
-        print(f'Epoch {epoch + 1}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}')
+                _, predicted = outputs.max(2)
+                total_val_accuracy += (predicted == targets).float().mean().item()
+
+                # Decode texts to compute BLEU and LCSS
+                predicted_texts = [tokenizer.decode(output.argmax(-1).cpu().numpy()) for output in outputs]
+                target_texts = [tokenizer.decode(target.cpu().numpy()) for target in targets]
+                for pred_text, target_text in zip(predicted_texts, target_texts):
+                    bleu_scores.append(calculate_bleu(target_text, pred_text))
+                    lcss_scores.append(calculate_lcss(target_text, pred_text))
+
+        avg_val_loss = total_val_loss / len(val_dataloader)
+        avg_val_accuracy = total_val_accuracy / len(val_dataloader)
+        avg_bleu_score = np.mean(bleu_scores)
+        avg_lcss_score = np.mean(lcss_scores)
+
+        print(
+            f'Epoch {epoch + 1}: Train Loss = {avg_train_loss:.4f}, Train Acc = {avg_train_accuracy:.4f}, Val Loss = {avg_val_loss:.4f}, Val Acc = {avg_val_accuracy:.4f}, Avg BLEU = {avg_bleu_score:.4f}, Avg LCSS = {avg_lcss_score:.4f}')
 
 
 def validate(model, dataloader, criterion, device):
@@ -134,22 +178,41 @@ def validate(model, dataloader, criterion, device):
     return average_loss
 
 
-def generate_text(model, tokenizer, start_seq, length, device='cuda'):
+def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')):
+    """Filter a distribution of logits using top-k and/or nucleus (top-p) filtering"""
+    if top_k > 0:
+        indices_to_remove = logits < torch.topk(logits, top_k).values.min()
+        logits[indices_to_remove] = filter_value
+
+    if top_p > 0.0:
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+        sorted_indices_to_remove = cumulative_probs > top_p
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = False
+        indices_to_remove = sorted_indices[sorted_indices_to_remove]
+        logits[indices_to_remove] = filter_value
+    return logits
+
+
+def generate_text(model, tokenizer, start_seq, length, device='cuda', top_k=10, top_p=0.95):
     model.eval()
     start_tokens = tokenizer.encode(start_seq)
-    input = torch.tensor(start_tokens, dtype=torch.long).unsqueeze(0).to(device)
+    input_ids = torch.tensor([start_tokens], dtype=torch.long).to(device)
     hidden = model.init_hidden(1)
 
-    generated_text = start_seq
+    generated_ids = []
     with torch.no_grad():
         for _ in range(length):
-            output, hidden = model(input, hidden)
-            probabilities = torch.softmax(output[:, -1, :], dim=1)
+            output, hidden = model(input_ids, hidden)
+            logits = model.fc(output[:, -1, :])  # Get the logits from the last time step
+            filtered_logits = top_k_top_p_filtering(logits.squeeze(), top_k=top_k, top_p=top_p)
+            probabilities = F.softmax(filtered_logits, dim=-1)
             next_token_id = torch.multinomial(probabilities, 1).item()
-            generated_text += tokenizer.decode([next_token_id])
+            generated_ids.append(next_token_id)
+            input_ids = torch.tensor([[next_token_id]], dtype=torch.long).to(device)
 
-            input = torch.tensor([[next_token_id]], dtype=torch.long).to(device)
-
+    generated_text = tokenizer.decode(generated_ids)
     return generated_text
 
 
@@ -158,16 +221,16 @@ def get_device():
 
 
 if __name__ == "__main__":
-    json_tokenizer_path = '/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer_Tokyo_attr_loc_mode.json'
+    json_tokenizer_path = '/home/zhangky/Documents/ZhangKY/Tokenizer/trip_chain_tokenizer_Tokyo_attr_loc_mode.json'
     tokenizer = JSONTokenizer(json_tokenizer_path)
     vocab_size = len(tokenizer.token_to_id)
 
-    train_file_path = '/home/ubuntu/Documents/TokyoPT/PTChain/PTAttrActLocMode/Tokyo2008PTChain_Mode_6_24_Train.txt'
-    val_file_path = '/home/ubuntu/Documents/TokyoPT/PTChain/PTAttrActLocMode/Tokyo2008PTChain_Mode_6_24_Eval.txt'
+    train_file_path = '/home/zhangky/Documents/ZhangKY/TokyoPT/Tokyo2008PTChain_Mode_6_24_Train.txt'
+    val_file_path = '/home/zhangky/Documents/ZhangKY/TokyoPT/Tokyo2008PTChain_Mode_6_24_Eval.txt'
     train_dataset = TextDataset(train_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=25000)
     val_dataset = TextDataset(val_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=2500)
 
     device = get_device()
-    model = LSTMModel(vocab_size, embedding_dim=256, hidden_dim=512, num_layers=2).to(device)
+    model = LSTMModel(vocab_size, embedding_dim=64, hidden_dim=128, num_layers=2).to(device)
 
-    train_and_validate(model, train_dataset, val_dataset, batch_size=64, num_epochs=50, lr=5e-6, device=device)
+    train_and_validate(model, train_dataset, val_dataset, batch_size=64, num_epochs=100, lr=1e-3, device=device)
