@@ -1,6 +1,57 @@
 import json
 import numpy as np
 from torch.utils.data import Dataset
+from nltk.translate.bleu_score import sentence_bleu
+from nltk.tokenize import word_tokenize
+from nltk.translate.bleu_score import SmoothingFunction
+import difflib
+
+
+def calculate_accuracy(generated, reference):
+    gen_tokens = generated.split()
+    ref_tokens = reference.split()
+    correct = sum(g == r for g, r in zip(gen_tokens, ref_tokens))
+    return correct / len(gen_tokens)
+
+
+def calculate_bleu(reference, candidate):
+    smoothie = SmoothingFunction().method4
+    return sentence_bleu([word_tokenize(reference)], word_tokenize(candidate), smoothing_function=smoothie)
+
+
+def calculate_lcss(seq1, seq2):
+    matcher = difflib.SequenceMatcher(None, seq1, seq2)
+    match = matcher.find_longest_match(0, len(seq1), 0, len(seq2))
+    lcss_length = match.size
+    max_length = max(len(seq1), len(seq2))
+    return lcss_length / max_length if max_length > 0 else 0
+
+
+def validate_model(model, tokenizer, dataset, initial_length=39, generate_length=180, top_k=5, top_p=0.95,
+                   num_samples=None):
+    bleu_scores = []
+    lcss_scores = []
+    accuracies = []
+
+    num_samples = min(num_samples if num_samples is not None else len(dataset), len(dataset))
+
+    for i in range(num_samples):
+        initial_tokens = tokenizer.decode(dataset[i][:initial_length])
+        ground_truth = tokenizer.decode(dataset[i][initial_length:initial_length + generate_length])
+        generated_text = model.generate_text(tokenizer, initial_tokens, generate_length, top_k=top_k, top_p=top_p)
+
+        bleu_score = calculate_bleu(ground_truth, generated_text)
+        lcss_score = calculate_lcss(ground_truth, generated_text)
+        accuracy = calculate_accuracy(generated_text, ground_truth)
+        bleu_scores.append(bleu_score)
+        lcss_scores.append(lcss_score)
+        accuracies.append(accuracy)
+
+    average_bleu = np.mean(bleu_scores)
+    average_lcss = np.mean(lcss_scores)
+    average_accuracy = np.mean(accuracies)
+    print(
+        f"Validation BLEU Score: {average_bleu:.4f}, LCSS Score: {average_lcss:.4f}, Accuracy: {average_accuracy:.4f}")
 
 
 class JSONTokenizer:
@@ -42,38 +93,64 @@ class MarkovModel:
     def __init__(self):
         self.transitions = {}
 
-    def train(self, dataset):
-        # Count transitions
-        for sequence in dataset:
-            for i in range(len(sequence) - 1):
-                current, next_token = sequence[i], sequence[i + 1]
-                if current not in self.transitions:
-                    self.transitions[current] = {}
-                if next_token not in self.transitions[current]:
-                    self.transitions[current][next_token] = 0
-                self.transitions[current][next_token] += 1
+    def train(self, dataset, num_samples=None):
+        num_samples = num_samples if num_samples is not None else len(dataset)
+        for sequence in dataset[:num_samples]:
+            for i in range(3, len(sequence) - 1):
+                context = tuple(sequence[i - 3:i + 1])
+                next_token = sequence[i + 1]
+                if context not in self.transitions:
+                    self.transitions[context] = {}
+                if next_token not in self.transitions[context]:
+                    self.transitions[context][next_token] = 0
+                self.transitions[context][next_token] += 1
 
         # Convert counts to probabilities
-        for current in self.transitions:
-            total_transitions = sum(self.transitions[current].values())
-            for next_token in self.transitions[current]:
-                self.transitions[current][next_token] /= total_transitions
+        for context in self.transitions:
+            total_transitions = sum(self.transitions[context].values())
+            for next_token in self.transitions[context]:
+                self.transitions[context][next_token] /= total_transitions
 
-    def generate_text(self, tokenizer, start_seq, length):
-        generated_text = start_seq
-        current_token = tokenizer.encode(start_seq.split()[-1])[0]
+    def generate_text(self, tokenizer, initial_tokens, length, top_k=5, top_p=0.95):
+        tokens = tokenizer.encode(initial_tokens)
+        generated_tokens = []
+
         for _ in range(length):
-            next_token = self.sample_next(current_token)
-            generated_text += ' ' + tokenizer.decode([next_token])
-            current_token = next_token
+            if len(tokens) >= 4:
+                context = tuple(tokens[-4:])
+            else:
+                break
+            next_token = self.sample_next(context, top_k=top_k, top_p=top_p)
+            generated_tokens.append(next_token)
+            tokens.append(next_token)
+
+        generated_text = tokenizer.decode(generated_tokens)
         return generated_text
 
-    def sample_next(self, current_token):
-        if current_token not in self.transitions:
-            return current_token  # Handle case with no known transitions
-        next_tokens, probs = zip(*self.transitions[current_token].items())
-        next_token = np.random.choice(next_tokens, p=probs)
-        return next_token
+    def sample_next(self, context, top_k=5, top_p=0.95):
+        if context not in self.transitions or not self.transitions[context]:
+            return context[-1]  # Fall back to the last token if no transitions are available
+
+        next_tokens, counts = zip(*self.transitions[context].items())
+        probabilities = np.array(counts, dtype=np.float32)
+        probabilities /= probabilities.sum()
+
+        if top_k is not None:
+            indices = np.argsort(probabilities)[::-1][:top_k]
+            probabilities = probabilities[indices]
+            next_tokens = np.array(next_tokens)[indices]
+
+        if top_p is not None:
+            cumulative_probabilities = np.cumsum(probabilities)
+            indices = np.where(cumulative_probabilities > top_p)[0]
+            if indices.size > 0:
+                cutoff_index = indices[0]
+                probabilities = probabilities[:cutoff_index + 1]
+                next_tokens = next_tokens[:cutoff_index + 1]
+
+        probabilities /= probabilities.sum()
+        chosen_index = np.random.choice(len(next_tokens), p=probabilities)
+        return next_tokens[chosen_index]
 
 
 if __name__ == "__main__":
@@ -85,14 +162,5 @@ if __name__ == "__main__":
     val_dataset = SimpleDataset(val_file_path, tokenizer)
 
     model = MarkovModel()
-    model.train(train_dataset)
-
-    for i in range(min(2500, len(val_dataset))):
-        initial_sequence = val_dataset[i]
-        if len(initial_sequence) >= 219:
-            start_tokens = initial_sequence[:39]
-            initial_text = tokenizer.decode(start_tokens)
-            generated_text = model.generate_text(tokenizer, initial_text, 180)
-            print(f"Generated text for validation sample {i + 1}: {generated_text}")
-        else:
-            print(f"Validation sample {i + 1} does not meet the expected number of tokens.")
+    model.train(train_dataset, num_samples=250000)
+    validate_model(model, tokenizer, val_dataset, num_samples=25000, generate_length=180)
