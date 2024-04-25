@@ -98,7 +98,6 @@ class LSTMModel(nn.Module):
         return predictions
 
     def init_hidden(self, batch_size):
-        # Initialize hidden and cell states with zeros
         weight = next(self.parameters()).data
         hidden = (weight.new(self.num_layers, batch_size, self.hidden_dim).zero_(),
                   weight.new(self.num_layers, batch_size, self.hidden_dim).zero_())
@@ -132,7 +131,6 @@ def train_and_validate(model, train_dataset, val_dataset, batch_size, num_epochs
         avg_train_loss = total_train_loss / len(train_dataloader)
         avg_train_accuracy = total_train_accuracy / len(train_dataloader)
 
-        # Validation
         model.eval()
         total_val_loss = 0
         total_val_accuracy = 0
@@ -149,7 +147,6 @@ def train_and_validate(model, train_dataset, val_dataset, batch_size, num_epochs
                 _, predicted = outputs.max(2)
                 total_val_accuracy += (predicted == targets).float().mean().item()
 
-                # Decode texts to compute BLEU and LCSS
                 predicted_texts = [tokenizer.decode(output.argmax(-1).cpu().numpy()) for output in outputs]
                 target_texts = [tokenizer.decode(target.cpu().numpy()) for target in targets]
                 for pred_text, target_text in zip(predicted_texts, target_texts):
