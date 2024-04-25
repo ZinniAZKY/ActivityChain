@@ -178,7 +178,7 @@ def validate(model, dataloader, criterion, device):
     return average_loss
 
 
-def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')):
+def top_k_top_p_filtering(logits, top_k=25, top_p=0.9, filter_value=-float('Inf')):
     """Filter a distribution of logits using top-k and/or nucleus (top-p) filtering"""
     if top_k > 0:
         indices_to_remove = logits < torch.topk(logits, top_k).values.min()
@@ -195,7 +195,7 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')
     return logits
 
 
-def generate_text(model, tokenizer, start_seq, length, device='cuda', top_k=10, top_p=0.95):
+def generate_text(model, tokenizer, start_seq, length, device='cuda', top_k=25, top_p=0.9):
     model.eval()
     start_tokens = tokenizer.encode(start_seq)
     input_ids = torch.tensor([start_tokens], dtype=torch.long).to(device)
@@ -227,10 +227,10 @@ if __name__ == "__main__":
 
     train_file_path = '/home/zhangky/Documents/ZhangKY/TokyoPT/Tokyo2008PTChain_Mode_6_24_Train.txt'
     val_file_path = '/home/zhangky/Documents/ZhangKY/TokyoPT/Tokyo2008PTChain_Mode_6_24_Eval.txt'
-    train_dataset = TextDataset(train_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=25000)
-    val_dataset = TextDataset(val_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=2500)
+    train_dataset = TextDataset(train_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=250000)
+    val_dataset = TextDataset(val_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=25000)
 
     device = get_device()
     model = LSTMModel(vocab_size, embedding_dim=64, hidden_dim=128, num_layers=2).to(device)
 
-    train_and_validate(model, train_dataset, val_dataset, batch_size=64, num_epochs=100, lr=1e-3, device=device)
+    train_and_validate(model, train_dataset, val_dataset, batch_size=128, num_epochs=100, lr=1e-3, device=device)
