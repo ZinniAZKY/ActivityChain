@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
-import numpy as np
 import json
 from torch.utils.data import DataLoader, Dataset
+import torch.nn.functional as F
 
 torch.manual_seed(42)
 
@@ -57,13 +57,25 @@ class Generator(nn.Module):
         self.fc = nn.Linear(hidden_dim, vocab_size)
 
     def forward(self, x, hidden):
+        outputs = []
         x = self.embedding(x)
-        output, hidden = self.lstm(x, hidden)
-        logits = self.fc(output)
-        return logits, hidden
+
+        for i in range(x.size(1)):
+            _, hidden = self.lstm(x[:, i:i+1, :], hidden)
+
+        current_input = x[:, -1, :].unsqueeze(1)
+
+        for _ in range(180):
+            output, hidden = self.lstm(current_input, hidden)
+            current_input = self.fc(output)
+            outputs.append(current_input)
+            current_input = current_input[:, -1, :].max(1)[1].unsqueeze(1)
+            current_input = self.embedding(current_input)
+
+        outputs = torch.cat(outputs, dim=1)
+        return outputs, hidden
 
     def init_hidden(self, batch_size, device):
-        # Note the addition of 'device' parameter
         return (torch.zeros(1, batch_size, self.lstm.hidden_size, device=device),
                 torch.zeros(1, batch_size, self.lstm.hidden_size, device=device))
 
@@ -76,39 +88,36 @@ class Discriminator(nn.Module):
         self.fc = nn.Linear(hidden_dim, 1)
 
     def forward(self, x):
-        x = self.embedding(x)
+        x = self.embedding(x.long())
         output, _ = self.lstm(x)
-        logits = self.fc(output[:, -1, :])
+        final_output = output[:, -1, :]
+        logits = self.fc(final_output)
         return torch.sigmoid(logits)
 
 
-def train_generator(gen, dis, optimizer_g, inputs, hidden):
+def train_generator(gen, dis, optimizer_g, inputs, hidden, device):
     optimizer_g.zero_grad()
-    logits, _ = gen(inputs, hidden)
-    probs = torch.softmax(logits, dim=-1)
-    m = Categorical(probs)
-    actions = m.sample()
-    log_probs = m.log_prob(actions)
+    fake_data, _ = gen(inputs, hidden)
 
-    # Detach actions to avoid backprop through discriminator during generator update
-    rewards = dis(actions.detach().long())
-    rewards = rewards.squeeze()
+    fake_probs = torch.softmax(fake_data, dim=-1)
+    fake_data = torch.multinomial(fake_probs.view(-1, fake_probs.size(-1)), 1)
+    fake_data = fake_data.view(inputs.size(0), -1)
 
-    # Broadcast rewards to match log_probs shape
-    rewards = rewards.unsqueeze(1).expand_as(log_probs)
+    fake_data = fake_data.detach().to(device)
+    fake_preds = dis(fake_data)
+    fake_labels = torch.ones_like(fake_preds)
+    gen_loss = F.binary_cross_entropy(fake_preds, fake_labels)
 
-    loss = -torch.mean(log_probs * rewards)
-    loss.backward()
+    gen_loss.backward()
     optimizer_g.step()
-    return loss.item()
+    return gen_loss.item()
 
 
 def train_discriminator(dis, optimizer_d, real_data, fake_data, device):
     optimizer_d.zero_grad()
-    real_preds = dis(real_data.to(device)).squeeze()
+    real_preds = dis(real_data.to(device))
     real_loss = nn.BCEWithLogitsLoss()(real_preds, torch.ones_like(real_preds))
-
-    fake_preds = dis(fake_data.to(device)).squeeze()
+    fake_preds = dis(fake_data.detach().to(device))
     fake_loss = nn.BCEWithLogitsLoss()(fake_preds, torch.zeros_like(fake_preds))
 
     total_loss = real_loss + fake_loss
@@ -126,36 +135,26 @@ def validate_model(generator, discriminator, val_loader, device):
         for inputs, targets in val_loader:
             inputs, targets = inputs.to(device), targets.to(device)
             hidden = generator.init_hidden(inputs.size(0), device)
-
-            # Generator's forward pass to get logits and actions
             logits, _ = generator(inputs, hidden)
             probs = torch.softmax(logits, dim=-1)
             m = Categorical(probs)
-            actions = m.sample().long()  # Ensure actions are long
-            log_probs = m.log_prob(actions)  # Log probabilities of actions  # Log probabilities of actions
-
-            # Get rewards from the discriminator, ensure they're detached to avoid unwanted backprop
+            actions = m.sample().long()
+            log_probs = m.log_prob(actions)
             rewards = discriminator(actions.detach()).squeeze()
-            rewards = rewards.unsqueeze(1).expand(-1, logits.size(1))  # Expand rewards to match log_probs
-
-            # Calculate generator loss
+            rewards = rewards.unsqueeze(1).expand(-1, logits.size(1))
+            
             gen_loss = -torch.mean(log_probs * rewards)
             total_gen_loss += gen_loss.item()
-
-            # Discriminator losses on real and fake data
             real_preds = discriminator(targets).squeeze()
-            real_loss = nn.BCEWithLogitsLoss()(real_preds, torch.ones_like(real_preds))
-
-            fake_data = actions.detach().long()  # Again, ensure fake data is long
+            real_loss = nn.BCEWithLogitsLoss()(real_preds, torch.ones_like(real_preds, device=device))
+            fake_data = actions.detach()
             fake_preds = discriminator(fake_data).squeeze()
-            fake_loss = nn.BCEWithLogitsLoss()(fake_preds, torch.zeros_like(fake_preds))
-
-            disc_loss = real_loss + fake_loss
+            fake_loss = nn.BCEWithLogitsLoss()(fake_preds, torch.zeros_like(fake_preds, device=device))
+            disc_loss = (real_loss + fake_loss) / 2
             total_disc_loss += disc_loss.item()
 
-        avg_gen_loss = total_gen_loss / len(val_loader)
-        avg_disc_loss = total_disc_loss / len(val_loader)
-
+    avg_gen_loss = total_gen_loss / len(val_loader)
+    avg_disc_loss = total_disc_loss / len(val_loader)
     return avg_gen_loss, avg_disc_loss
 
 
@@ -169,17 +168,14 @@ def train_epochs(generator, discriminator, train_loader, val_loader, optimizer_g
         for inputs, targets in train_loader:
             inputs, targets = inputs.to(device), targets.to(device)
             hidden = generator.init_hidden(inputs.size(0), device)
-
-            # Update discriminator
             fake_logits, _ = generator(inputs, hidden)
             fake_probs = torch.softmax(fake_logits, dim=-1)
             m = Categorical(fake_probs)
             fake_data = m.sample()
             fake_data = fake_data.long().to(device)
+            
             d_loss = train_discriminator(discriminator, optimizer_d, targets, fake_data, device)
-
-            # Update generator
-            g_loss = train_generator(generator, discriminator, optimizer_g, inputs, hidden)
+            g_loss = train_generator(generator, discriminator, optimizer_g, inputs, hidden, device)
 
         avg_gen_loss, avg_disc_loss = validate_model(generator, discriminator, val_loader, device)
         print(f'Epoch {epoch}, Train D loss: {d_loss}, G loss: {g_loss}, Val Gen Loss: {avg_gen_loss}, Val Disc Loss: {avg_disc_loss}')
@@ -192,9 +188,9 @@ def get_device():
 
 
 if __name__ == "__main__":
-    json_tokenizer_path = '/home/zhangky/Documents/ZhangKY/Tokenizer/trip_chain_tokenizer_Tokyo_attr_loc_mode.json'
-    train_file_path = '/home/zhangky/Documents/ZhangKY/TokyoPT/Tokyo2008PTChain_Mode_6_24_Train.txt'
-    val_file_path = '/home/zhangky/Documents/ZhangKY/TokyoPT/Tokyo2008PTChain_Mode_6_24_Eval.txt'
+    json_tokenizer_path = '/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer_Tokyo_attr_loc_mode.json'
+    train_file_path = '/home/ubuntu/Documents/TokyoPT/PTChain/PTAttrActLocMode/Tokyo2008PTChain_Mode_6_24_Train.txt'
+    val_file_path = '/home/ubuntu/Documents/TokyoPT/PTChain/PTAttrActLocMode/Tokyo2008PTChain_Mode_6_24_Eval.txt'
     device = get_device()
     tokenizer = JSONTokenizer(json_tokenizer_path)
     vocab_size = len(tokenizer.token_to_id)
@@ -207,8 +203,8 @@ if __name__ == "__main__":
     optimizer_g = optim.Adam(generator.parameters(), lr=1e-4)
     optimizer_d = optim.Adam(discriminator.parameters(), lr=1e-4)
 
-    train_dataset = TextDataset(train_file_path, tokenizer, n_rows=25000)
-    val_dataset = TextDataset(val_file_path, tokenizer, n_rows=2500)
+    train_dataset = TextDataset(train_file_path, tokenizer, n_rows=2500)
+    val_dataset = TextDataset(val_file_path, tokenizer, n_rows=250)
     train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 
