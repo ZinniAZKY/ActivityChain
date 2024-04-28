@@ -124,13 +124,13 @@ def train_and_validate(model, train_dataset, val_dataset, batch_size, num_epochs
             optimizer.step()
             total_train_loss += loss.item()
 
-            # Calculate accuracy
-            _, predicted = outputs.max(2)  # Get the index of the max log-probability
+            _, predicted = outputs.max(2)
             total_train_accuracy += (predicted == targets).float().mean().item()
 
         avg_train_loss = total_train_loss / len(train_dataloader)
         avg_train_accuracy = total_train_accuracy / len(train_dataloader)
 
+        # Validation
         model.eval()
         total_val_loss = 0
         total_val_accuracy = 0
@@ -144,14 +144,16 @@ def train_and_validate(model, train_dataset, val_dataset, batch_size, num_epochs
                 loss = criterion(outputs.transpose(1, 2), targets)
                 total_val_loss += loss.item()
 
-                _, predicted = outputs.max(2)
-                total_val_accuracy += (predicted == targets).float().mean().item()
-
-                predicted_texts = [tokenizer.decode(output.argmax(-1).cpu().numpy()) for output in outputs]
+                sampled_token_ids = top_k_top_p_sampling(outputs[:, -1, :], k=25, p=0.9)
+                sampled_texts = [tokenizer.decode(token_ids.cpu().numpy()) for token_ids in sampled_token_ids]
                 target_texts = [tokenizer.decode(target.cpu().numpy()) for target in targets]
-                for pred_text, target_text in zip(predicted_texts, target_texts):
-                    bleu_scores.append(calculate_bleu(target_text, pred_text))
-                    lcss_scores.append(calculate_lcss(target_text, pred_text))
+
+                for sampled_text, target_text in zip(sampled_texts, target_texts):
+                    bleu_scores.append(calculate_bleu(target_text, sampled_text))
+                    lcss_scores.append(calculate_lcss(target_text, sampled_text))
+
+                _, predicted_token_ids = outputs.max(dim=-1)
+                total_val_accuracy += (predicted_token_ids[:, -1] == targets[:, -1]).float().mean().item()
 
         avg_val_loss = total_val_loss / len(val_dataloader)
         avg_val_accuracy = total_val_accuracy / len(val_dataloader)
@@ -162,55 +164,31 @@ def train_and_validate(model, train_dataset, val_dataset, batch_size, num_epochs
             f'Epoch {epoch + 1}: Train Loss = {avg_train_loss:.4f}, Train Acc = {avg_train_accuracy:.4f}, Val Loss = {avg_val_loss:.4f}, Val Acc = {avg_val_accuracy:.4f}, Avg BLEU = {avg_bleu_score:.4f}, Avg LCSS = {avg_lcss_score:.4f}')
 
 
-def validate(model, dataloader, criterion, device):
-    model.eval()
-    total_loss = 0
-    with torch.no_grad():
-        for inputs, targets in dataloader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            output, _ = model(inputs)
-            loss = criterion(output.transpose(1, 2), targets)
-            total_loss += loss.item()
-    average_loss = total_loss / len(dataloader)
-    return average_loss
+def top_k_top_p_sampling(logits, k=25, p=0.9, max_length=180):
+    sampled_token_ids = []
 
-
-def top_k_top_p_filtering(logits, top_k=25, top_p=0.9, filter_value=-float('Inf')):
-    """Filter a distribution of logits using top-k and/or nucleus (top-p) filtering"""
-    if top_k > 0:
-        indices_to_remove = logits < torch.topk(logits, top_k).values.min()
-        logits[indices_to_remove] = filter_value
-
-    if top_p > 0.0:
+    for _ in range(max_length):
         sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-        sorted_indices_to_remove = cumulative_probs > top_p
-        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-        sorted_indices_to_remove[..., 0] = False
-        indices_to_remove = sorted_indices[sorted_indices_to_remove]
-        logits[indices_to_remove] = filter_value
-    return logits
+        cumulative_probs = F.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
 
+        # Apply top-k sampling
+        if k > 0:
+            sorted_indices = sorted_indices[:, :k]
+            cumulative_probs = cumulative_probs[:, :k]
 
-def generate_text(model, tokenizer, start_seq, length, device='cuda', top_k=25, top_p=0.9):
-    model.eval()
-    start_tokens = tokenizer.encode(start_seq)
-    input_ids = torch.tensor([start_tokens], dtype=torch.long).to(device)
-    hidden = model.init_hidden(1)
+        # Apply top-p sampling
+        if p > 0.0:
+            sorted_indices_to_remove = cumulative_probs > p
+            sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
+            sorted_indices_to_remove[:, 0] = 0
+            sorted_indices[cumulative_probs > p] = -1
 
-    generated_ids = []
-    with torch.no_grad():
-        for _ in range(length):
-            output, hidden = model(input_ids, hidden)
-            logits = model.fc(output[:, -1, :])  # Get the logits from the last time step
-            filtered_logits = top_k_top_p_filtering(logits.squeeze(), top_k=top_k, top_p=top_p)
-            probabilities = F.softmax(filtered_logits, dim=-1)
-            next_token_id = torch.multinomial(probabilities, 1).item()
-            generated_ids.append(next_token_id)
-            input_ids = torch.tensor([[next_token_id]], dtype=torch.long).to(device)
+        sampled = sorted_indices.gather(dim=-1, index=torch.multinomial(cumulative_probs, 1))
+        sampled_token_ids.append(sampled)
 
-    generated_text = tokenizer.decode(generated_ids)
-    return generated_text
+        logits = logits.scatter(dim=-1, index=sampled, value=float('-inf'))
+
+    return torch.cat(sampled_token_ids, dim=-1)
 
 
 def get_device():
@@ -218,14 +196,14 @@ def get_device():
 
 
 if __name__ == "__main__":
-    json_tokenizer_path = '/home/zhangky/Documents/ZhangKY/Tokenizer/trip_chain_tokenizer_Tokyo_attr_loc_mode.json'
+    json_tokenizer_path = '/home/ubuntu/Documents/Tokenizer/trip_chain_tokenizer_Tokyo_attr_loc_mode.json'
     tokenizer = JSONTokenizer(json_tokenizer_path)
     vocab_size = len(tokenizer.token_to_id)
 
-    train_file_path = '/home/zhangky/Documents/ZhangKY/TokyoPT/Tokyo2008PTChain_Mode_6_24_Train.txt'
-    val_file_path = '/home/zhangky/Documents/ZhangKY/TokyoPT/Tokyo2008PTChain_Mode_6_24_Eval.txt'
-    train_dataset = TextDataset(train_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=250000)
-    val_dataset = TextDataset(val_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=25000)
+    train_file_path = '/home/ubuntu/Documents/TokyoPT/PTChain/PTAttrActLocMode/Tokyo2008PTChain_Mode_6_24_Train.txt'
+    val_file_path = '/home/ubuntu/Documents/TokyoPT/PTChain/PTAttrActLocMode/Tokyo2008PTChain_Mode_6_24_Eval.txt'
+    train_dataset = TextDataset(train_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=50000)
+    val_dataset = TextDataset(val_file_path, tokenizer, sequence_length=39, predict_length=180, n_rows=5000)
 
     device = get_device()
     model = LSTMModel(vocab_size, embedding_dim=64, hidden_dim=128, num_layers=2).to(device)
