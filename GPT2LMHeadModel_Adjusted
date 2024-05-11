@@ -7,14 +7,17 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # Load log priors and create a tensor
-        log_prior_df = pd.read_csv('/home/ubuntu/PycharmProjects/pythonProject/MobilityGPT/data/token_priors.csv')
-        log_prior_df['Log_Token_Prior'] *= 0
-
+        log_prior_df = pd.read_csv('/home/zhangky/Documents/ZhangKY/TokyoPT/token_priors.csv')
+        log_prior_df['Log_Token_Prior'] *= 0.1
         log_prior_tensor = torch.zeros(config.vocab_size)
         for _, row in log_prior_df.iterrows():
             log_prior_tensor[int(row['Token_ID'])] = row['Log_Token_Prior']
-
         self.log_prior_tensor = log_prior_tensor
+
+        # import temporal embedding layer
+        self.temporal_embeddings = nn.Embedding(73, config.n_embd)
+        self.temporal_indices = torch.from_numpy(
+            pd.read_csv('/home/zhangky/Documents/ZhangKY/TokyoPT/Temporal_Index.txt', header=None).values).long()
 
         # Model parallel
         self.model_parallel = False
@@ -137,6 +140,14 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # Compute inputs_embeds if not provided
+        if inputs_embeds is None and input_ids is not None:
+            inputs_embeds = self.transformer.wte(input_ids)
+
+        # Fetch temporal embeddings using the temporal indices based on the input_ids shape
+        temporal_embeds = self.temporal_embeddings(self.temporal_indices[:input_ids.size(0), :input_ids.size(1)])
+        inputs_embeds += temporal_embeds
 
         transformer_outputs = self.transformer(
             input_ids,
